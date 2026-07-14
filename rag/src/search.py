@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -21,11 +22,70 @@ MODEL_NAME = "intfloat/multilingual-e5-small"
 # 검색할 최대 공지 개수
 TOP_K = 5
 
+# 하이브리드 검색 가중치
+SEMANTIC_WEIGHT = 0.75
+KEYWORD_WEIGHT = 0.25
+
 # 검색 결과 1위가 이 점수보다 낮으면 관련 없는 질문으로 판단
-MIN_TOP_SCORE = 0.84
+MIN_TOP_SCORE = 0.67
+
+# 정확 키워드가 충분히 맞으면 의미 점수가 낮아도 관련 공지로 판단
+MIN_KEYWORD_SCORE = 0.6
 
 # 1위 결과와 점수 차이가 이 값보다 큰 공지는 제외
-MAX_SCORE_GAP = 0.04
+MAX_SCORE_GAP = 0.07
+
+# 한국어 조사를 포함한 짧은 질문 표현은 키워드 검색에서 제외
+STOPWORDS = {
+    "공지",
+    "관련",
+    "알려줘",
+    "알려주세요",
+    "뭐야",
+    "뭔가요",
+    "뭐",
+    "무엇",
+    "무슨",
+    "언제",
+    "언제야",
+    "언제까지",
+    "언제까지야",
+    "언제인가요",
+    "어디",
+    "어디야",
+    "어딘가요",
+    "어떻게",
+    "있어",
+    "있나요",
+    "해줘",
+    "해주세요",
+    "나는",
+    "제가",
+}
+
+KOREAN_SUFFIXES = (
+    "까지",
+    "부터",
+    "에서",
+    "에게",
+    "으로",
+    "하고",
+    "처럼",
+    "보다",
+    "은",
+    "는",
+    "이",
+    "가",
+    "을",
+    "를",
+    "에",
+    "로",
+    "와",
+    "과",
+    "도",
+    "만",
+    "요",
+)
 
 
 # =========================================================
@@ -59,6 +119,88 @@ def create_notice_text(notice: dict) -> str:
         f"작성일: {notice.get('posted_at', '')}\n"
         f"내용: {notice.get('content', '')}"
     )
+
+
+# =========================================================
+# 키워드 검색
+# =========================================================
+
+def normalize_text(text: str) -> str:
+    """키워드 비교를 위해 대소문자와 공백을 정리합니다."""
+    return " ".join(text.lower().split())
+
+
+def strip_korean_suffix(token: str) -> str:
+    """질문 키워드 끝에 붙은 대표적인 한국어 조사를 제거합니다."""
+    for suffix in KOREAN_SUFFIXES:
+        if token.endswith(suffix) and len(token) > len(suffix) + 1:
+            return token[: -len(suffix)]
+
+    return token
+
+
+def extract_keywords(question: str) -> list[str]:
+    """사용자 질문에서 키워드 검색에 사용할 단어를 추출합니다."""
+    tokens = re.findall(r"[0-9a-zA-Z가-힣]+", question.lower())
+    keywords = []
+
+    for token in tokens:
+        keyword = strip_korean_suffix(token)
+
+        if keyword in STOPWORDS:
+            continue
+
+        if len(keyword) < 2 and not keyword.isdigit():
+            continue
+
+        if keyword not in keywords:
+            keywords.append(keyword)
+
+    return keywords
+
+
+def calculate_keyword_score(
+    question: str,
+    notice: dict,
+) -> tuple[float, list[str]]:
+    """
+    질문 키워드가 공지 제목/카테고리/본문에 얼마나 직접 등장하는지 계산합니다.
+
+    제목과 카테고리에 등장한 키워드는 본문보다 조금 더 높은 점수를 줍니다.
+    """
+    keywords = extract_keywords(question)
+
+    if not keywords:
+        return 0.0, []
+
+    title_text = normalize_text(str(notice.get("title", "")))
+    category_text = normalize_text(str(notice.get("category", "")))
+    content_text = normalize_text(str(notice.get("content", "")))
+    url_text = normalize_text(str(notice.get("url", "")))
+
+    matched_keywords = []
+    score = 0.0
+
+    for keyword in keywords:
+        keyword_score = 0.0
+
+        if keyword in title_text:
+            keyword_score += 1.0
+
+        if keyword in category_text:
+            keyword_score += 0.8
+
+        if keyword in content_text:
+            keyword_score += 0.6
+
+        if keyword in url_text:
+            keyword_score += 0.2
+
+        if keyword_score > 0:
+            matched_keywords.append(keyword)
+            score += min(keyword_score, 1.0)
+
+    return score / len(keywords), matched_keywords
 
 
 # =========================================================
@@ -100,8 +242,7 @@ def search_notices(
     top_k: int = TOP_K,
 ) -> list[dict]:
     """
-    질문과 의미가 비슷한 공지를 검색하고
-    유사도가 높은 순서대로 반환합니다.
+    의미 검색과 키워드 검색을 함께 사용해 관련 공지를 반환합니다.
     """
     question_embedding = model.encode(
         f"query: {question}",
@@ -113,28 +254,40 @@ def search_notices(
         dtype=np.float32,
     )
 
-    # 모든 벡터가 정규화되어 있으므로
-    # 내적 결과가 코사인 유사도와 같음
-    similarities = notice_embeddings @ question_embedding
-
-    result_count = min(top_k, len(notices))
-
-    top_indices = np.argsort(similarities)[::-1][:result_count]
-
     results = []
 
-    for index in top_indices:
+    # 모든 벡터가 정규화되어 있으므로 내적 결과가 코사인 유사도와 같음
+    semantic_scores = notice_embeddings @ question_embedding
+
+    for index, notice in enumerate(notices):
+        semantic_score = float(semantic_scores[index])
+        keyword_score, matched_keywords = calculate_keyword_score(
+            question=question,
+            notice=notice,
+        )
+        hybrid_score = (
+            semantic_score * SEMANTIC_WEIGHT
+            + keyword_score * KEYWORD_WEIGHT
+        )
+
         results.append({
-            "score": float(similarities[index]),
-            "notice": notices[index],
+            "score": hybrid_score,
+            "hybrid_score": hybrid_score,
+            "semantic_score": semantic_score,
+            "keyword_score": keyword_score,
+            "matched_keywords": matched_keywords,
+            "notice": notice,
         })
 
-    return results
+    results.sort(key=lambda result: result["hybrid_score"], reverse=True)
+
+    return results[: min(top_k, len(results))]
 
 
 def get_relevant_notices(
     results: list[dict],
     min_top_score: float = MIN_TOP_SCORE,
+    min_keyword_score: float = MIN_KEYWORD_SCORE,
     max_score_gap: float = MAX_SCORE_GAP,
 ) -> list[dict]:
     """
@@ -146,19 +299,24 @@ def get_relevant_notices(
     if not results:
         return []
 
-    top_score = results[0]["score"]
+    top_score = results[0]["hybrid_score"]
 
-    # 가장 높은 결과조차 기준보다 낮으면 관련 공지 없음
-    if top_score < min_top_score:
+    top_keyword_score = results[0]["keyword_score"]
+
+    # 하이브리드 점수와 키워드 점수가 모두 낮으면 관련 공지 없음
+    if top_score < min_top_score and top_keyword_score < min_keyword_score:
         return []
 
     relevant_results = []
 
     for result in results:
-        score = result["score"]
+        score = result["hybrid_score"]
         score_gap = top_score - score
 
-        if score_gap <= max_score_gap:
+        if (
+            score_gap <= max_score_gap
+            or result["keyword_score"] >= min_keyword_score
+        ):
             relevant_results.append(result)
 
     return relevant_results
@@ -178,7 +336,10 @@ def print_relevant_results(results: list[dict]) -> None:
 
         print(f"\n{rank}. {notice.get('title', '제목 없음')}")
         print(f"카테고리: {notice.get('category', '없음')}")
-        print(f"유사도: {result['score']:.4f}")
+        print(f"하이브리드 점수: {result['hybrid_score']:.4f}")
+        print(f"의미 검색 점수: {result['semantic_score']:.4f}")
+        print(f"키워드 검색 점수: {result['keyword_score']:.4f}")
+        print(f"매칭 키워드: {', '.join(result['matched_keywords']) or '없음'}")
         print(f"작성일: {notice.get('posted_at', '없음')}")
         print(f"내용: {notice.get('content', '없음')}")
         print(f"URL: {notice.get('url', '없음')}")
@@ -191,14 +352,16 @@ def print_search_failure(results: list[dict]) -> None:
     if not results:
         return
 
-    top_score = results[0]["score"]
-    print(f"최고 유사도: {top_score:.4f}")
+    top_score = results[0]["hybrid_score"]
+    print(f"최고 하이브리드 점수: {top_score:.4f}")
+    print(f"의미 검색 점수: {results[0]['semantic_score']:.4f}")
+    print(f"키워드 검색 점수: {results[0]['keyword_score']:.4f}")
 
     if len(results) >= 2:
-        second_score = results[1]["score"]
+        second_score = results[1]["hybrid_score"]
         score_gap = top_score - second_score
 
-        print(f"2위 유사도: {second_score:.4f}")
+        print(f"2위 하이브리드 점수: {second_score:.4f}")
         print(f"1위와 2위 점수 차이: {score_gap:.4f}")
 
 

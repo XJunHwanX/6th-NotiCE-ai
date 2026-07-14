@@ -8,17 +8,27 @@ from google import genai
 ROOT_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT_DIR / ".env")
 
-api_key = os.getenv("GEMINI_API_KEY")
-
-if not api_key:
-    raise ValueError(
-        "GEMINI_API_KEY를 찾을 수 없습니다. "
-        "레포 최상위의 .env 파일을 확인해주세요."
-    )
-
-client = genai.Client(api_key=api_key)
-
 LLM_MODEL_NAME = "gemini-3.5-flash"
+_client: genai.Client | None = None
+
+
+def get_client() -> genai.Client:
+    """Gemini 클라이언트를 필요할 때 한 번만 생성합니다."""
+    global _client
+
+    if _client is not None:
+        return _client
+
+    api_key = os.getenv("GEMINI_API_KEY")
+
+    if not api_key:
+        raise ValueError(
+            "GEMINI_API_KEY를 찾을 수 없습니다. "
+            "레포 최상위의 .env 파일을 확인해주세요."
+        )
+
+    _client = genai.Client(api_key=api_key)
+    return _client
 
 
 def create_context(results: list[dict]) -> str:
@@ -36,11 +46,42 @@ def create_context(results: list[dict]) -> str:
 작성일: {notice.get("posted_at", "")}
 내용: {notice.get("content", "")}
 원문 URL: {notice.get("url", "")}
-검색 유사도: {result.get("score", 0):.4f}
+하이브리드 검색 점수: {result.get("hybrid_score", 0):.4f}
+의미 검색 점수: {result.get("semantic_score", 0):.4f}
+키워드 검색 점수: {result.get("keyword_score", 0):.4f}
+매칭 키워드: {", ".join(result.get("matched_keywords", [])) or "없음"}
 """.strip()
         )
 
     return "\n\n".join(context_parts)
+
+
+def create_source_section(results: list[dict]) -> str:
+    """답변 아래에 붙일 출처 목록을 만듭니다."""
+    source_lines = ["\n\n[참고한 공지]"]
+    seen_sources = set()
+
+    for result in results:
+        notice = result["notice"]
+        source_key = notice.get("url") or notice.get("id") or notice.get("title")
+
+        if source_key in seen_sources:
+            continue
+
+        seen_sources.add(source_key)
+        title = notice.get("title", "제목 없음")
+        posted_at = notice.get("posted_at", "작성일 없음")
+        url = notice.get("url", "URL 없음")
+
+        source_lines.append(f"- {title} ({posted_at})")
+        source_lines.append(f"  {url}")
+
+    return "\n".join(source_lines)
+
+
+def append_source_section(answer: str, results: list[dict]) -> str:
+    """LLM이 출처를 빠뜨려도 코드에서 항상 출처를 붙입니다."""
+    return f"{answer.strip()}{create_source_section(results)}"
 
 
 def generate_answer(
@@ -65,7 +106,7 @@ def generate_answer(
 4. 날짜, 시간, 대상, 신청 방법, 지원 조건을 정확하게 전달하세요.
 5. 검색된 공지 중 질문과 직접 관련 없는 공지는 답변에서 제외하세요.
 6. 공지 내용만으로 답할 수 없다면 확인할 수 없다고 말하세요.
-7. 답변 마지막에는 실제로 참고한 공지의 제목과 URL을 표시하세요.
+7. 출처 목록은 시스템이 별도로 붙이므로 답변 본문에는 URL 목록을 반복하지 마세요.
 
 [사용자 질문]
 {question}
@@ -75,7 +116,7 @@ def generate_answer(
 """.strip()
 
     try:
-        response = client.models.generate_content(
+        response = get_client().models.generate_content(
             model=LLM_MODEL_NAME,
             contents=prompt,
         )
@@ -85,4 +126,7 @@ def generate_answer(
     if not response.text:
         return "답변을 생성하지 못했습니다."
 
-    return response.text.strip()
+    return append_source_section(
+        answer=response.text,
+        results=relevant_results,
+    )
