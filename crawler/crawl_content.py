@@ -32,6 +32,7 @@ BASE_URL = "https://wwwce.hongik.ac.kr"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 USE_OCR = bool(GEMINI_API_KEY)
 
+
 # 조정 가능한 설정값들
 INPUT_CSV = "../data/cse_notices.csv"
 OUTPUT_CSV = "cse_notices_with_content.csv"
