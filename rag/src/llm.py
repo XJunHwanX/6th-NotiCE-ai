@@ -43,13 +43,9 @@ def create_context(results: list[dict]) -> str:
 [공지 {index}]
 제목: {notice.get("title", "")}
 카테고리: {notice.get("category", "")}
-작성일: {notice.get("posted_at", "")}
+작성일: {notice.get("published_at", "")}
 내용: {notice.get("content", "")}
 원문 URL: {notice.get("url", "")}
-하이브리드 검색 점수: {result.get("hybrid_score", 0):.4f}
-의미 검색 점수: {result.get("semantic_score", 0):.4f}
-키워드 검색 점수: {result.get("keyword_score", 0):.4f}
-매칭 키워드: {", ".join(result.get("matched_keywords", [])) or "없음"}
 """.strip()
         )
 
@@ -70,10 +66,10 @@ def create_source_section(results: list[dict]) -> str:
 
         seen_sources.add(source_key)
         title = notice.get("title", "제목 없음")
-        posted_at = notice.get("posted_at", "작성일 없음")
+        published_at = notice.get("published_at", "작성일 없음")
         url = notice.get("url", "URL 없음")
 
-        source_lines.append(f"- {title} ({posted_at})")
+        source_lines.append(f"- {title} ({published_at})")
         source_lines.append(f"  {url}")
 
     return "\n".join(source_lines)
@@ -87,12 +83,19 @@ def append_source_section(answer: str, results: list[dict]) -> str:
 def generate_answer(
     question: str,
     relevant_results: list[dict],
+    answer_mode: str = "focused",
 ) -> str:
     """검색된 공지를 근거로 사용자 질문에 답변합니다."""
     if not relevant_results:
         return "현재 저장된 공지에서는 관련 내용을 찾지 못했습니다."
 
     context = create_context(relevant_results)
+    mode_instruction = (
+        "선택한 공지의 목적을 한 문장으로 설명하고, 핵심 정보만 최대 4개의 "
+        "짧은 항목으로 요약하세요."
+        if answer_mode == "summary"
+        else "질문에 대한 답을 먼저 말하고, 필요한 근거만 최대 4개의 짧은 항목으로 답하세요."
+    )
 
     prompt = f"""
 당신은 홍익대학교 컴퓨터공학과 공지사항 안내 챗봇입니다.
@@ -107,6 +110,8 @@ def generate_answer(
 5. 검색된 공지 중 질문과 직접 관련 없는 공지는 답변에서 제외하세요.
 6. 공지 내용만으로 답할 수 없다면 확인할 수 없다고 말하세요.
 7. 출처 목록은 시스템이 별도로 붙이므로 답변 본문에는 URL 목록을 반복하지 마세요.
+8. 공지 원문 전체를 옮기거나 긴 문단으로 답하지 마세요.
+9. {mode_instruction}
 
 [사용자 질문]
 {question}

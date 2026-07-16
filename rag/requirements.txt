@@ -19,6 +19,8 @@ huggingface_hub==1.23.0
 idna==3.18
 Jinja2==3.1.6
 joblib==1.5.3
+kiwipiepy==0.23.2
+kiwipiepy-model==0.23.0
 markdown-it-py==4.2.0
 MarkupSafe==3.0.3
 mdurl==0.1.2

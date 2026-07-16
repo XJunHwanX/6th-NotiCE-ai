@@ -1,0 +1,195 @@
+import unittest
+
+import numpy as np
+
+from rag.src.conversation import ConversationState
+from rag.src.intent import QueryIntent, classify_intent
+from rag.src.preprocess import QueryPreprocessor
+from rag.src.search import create_result_selection_answer, search_notices
+
+
+class FakeModel:
+    def encode(self, text, normalize_embeddings=True):
+        return np.asarray([1.0, 0.0], dtype=np.float32)
+
+
+class QueryPreprocessorTests(unittest.TestCase):
+    def setUp(self):
+        self.preprocessor = QueryPreprocessor()
+
+    def test_normalizes_attached_notice_question(self):
+        processed = self.preprocessor.process("인턴공지알려줘")
+
+        self.assertEqual(processed.normalized, "인턴 공지 알려줘")
+        self.assertIn("인턴", processed.keywords)
+
+    def test_expands_course_alias(self):
+        normalized = self.preprocessor.normalize("배알골 기말 어디서봄?")
+
+        self.assertIn("배OO 교수님 알고리즘", normalized)
+        self.assertIn("어디서 봄", normalized)
+
+
+class IntentTests(unittest.TestCase):
+    def test_classifies_supported_routes(self):
+        cases = {
+            "다른 건 없어?": QueryIntent.MORE_RESULTS,
+            "신청기간 널널한 거 없어?": QueryIntent.DEADLINE_RELAXED,
+            "곧 마감인 공지 있어?": QueryIntent.DEADLINE_URGENT,
+            "배알골 기말 어디서 봄?": QueryIntent.EXAM_LOCATION,
+            "이 공지 요약해줘": QueryIntent.NOTICE_SUMMARY,
+        }
+
+        for question, expected in cases.items():
+            with self.subTest(question=question):
+                self.assertEqual(classify_intent(question), expected)
+
+    def test_short_question_uses_context_as_follow_up(self):
+        self.assertEqual(
+            classify_intent("서류는?", has_context=True),
+            QueryIntent.FOLLOW_UP,
+        )
+        self.assertEqual(
+            classify_intent("서류는?", has_context=False),
+            QueryIntent.GENERAL_SEARCH,
+        )
+        self.assertEqual(
+            classify_intent("상금은?", has_context=True),
+            QueryIntent.FOLLOW_UP,
+        )
+
+
+class ConversationStateTests(unittest.TestCase):
+    def setUp(self):
+        self.preprocessor = QueryPreprocessor()
+        self.state = ConversationState()
+
+    def test_more_results_reuses_query_and_excludes_shown_notices(self):
+        initial_query = self.preprocessor.process("인턴공지 알려줘")
+        initial_resolution = self.state.resolve(
+            initial_query,
+            QueryIntent.GENERAL_SEARCH,
+        )
+        self.state.record_results(
+            initial_resolution,
+            [{"notice": {"id": 1}}, {"notice": {"id": 2}}],
+        )
+
+        more_query = self.preprocessor.process("다른 건 없어?")
+        resolution = self.state.resolve(
+            more_query,
+            QueryIntent.MORE_RESULTS,
+        )
+
+        self.assertEqual(resolution.search_question, "인턴 공지 알려줘")
+        self.assertEqual(resolution.exclude_notice_ids, (1, 2))
+
+    def test_follow_up_builds_standalone_search_question(self):
+        self.state.last_search_query = "장학금 신청 언제까지야?"
+        query = self.preprocessor.process("서류는?")
+
+        resolution = self.state.resolve(query, QueryIntent.FOLLOW_UP)
+
+        self.assertIn("장학금 신청", resolution.search_question)
+        self.assertIn("서류는?", resolution.search_question)
+
+    def test_more_results_without_context_asks_for_topic(self):
+        query = self.preprocessor.process("다른 건 없어?")
+
+        resolution = self.state.resolve(query, QueryIntent.MORE_RESULTS)
+
+        self.assertIsNotNone(resolution.clarification)
+
+    def test_selects_numbered_candidate_and_keeps_it_active(self):
+        query = self.preprocessor.process("대회 공지 알려줘")
+        resolution = self.state.resolve(query, QueryIntent.GENERAL_SEARCH)
+        results = [
+            {"notice": {"id": 10, "title": "첫 번째 대회"}},
+            {"notice": {"id": 20, "title": "두 번째 대회"}},
+            {"notice": {"id": 30, "title": "세 번째 대회"}},
+        ]
+        self.state.record_results(resolution, results)
+
+        selected, error = self.state.select_candidate("2번 공지가 궁금해")
+
+        self.assertIsNone(error)
+        self.assertEqual(selected["notice"]["id"], 20)
+        self.assertEqual(self.state.active_result["notice"]["id"], 20)
+        self.assertEqual(self.state.referenced_notice_ids, [20])
+
+    def test_rejects_candidate_number_out_of_range(self):
+        self.state.candidate_results = [
+            {"notice": {"id": 10, "title": "첫 번째 대회"}},
+        ]
+
+        selected, error = self.state.select_candidate("3번")
+
+        self.assertIsNone(selected)
+        self.assertIn("1번부터 1번", error)
+
+    def test_selects_candidate_by_ordinal_or_title(self):
+        self.state.candidate_results = [
+            {"notice": {"id": 10, "title": "AI 아이디어 경진대회"}},
+            {"notice": {"id": 20, "title": "소프트웨어 공모전"}},
+        ]
+
+        ordinal, _ = self.state.select_candidate("두 번째 알려줘")
+        title, _ = self.state.select_candidate("AI 아이디어 경진대회 알려줘")
+
+        self.assertEqual(ordinal["notice"]["id"], 20)
+        self.assertEqual(title["notice"]["id"], 10)
+
+
+class SearchTests(unittest.TestCase):
+    def test_result_selection_answer_only_lists_titles(self):
+        results = [
+            {
+                "hybrid_score": 0.9,
+                "notice": {
+                    "id": 1,
+                    "title": "AI 경진대회",
+                    "content": "사용자에게 아직 보여주면 안 되는 긴 본문",
+                },
+            },
+            {
+                "hybrid_score": 0.8,
+                "notice": {
+                    "id": 2,
+                    "title": "소프트웨어 공모전",
+                    "content": "또 다른 긴 본문",
+                },
+            },
+        ]
+
+        answer = create_result_selection_answer(results)
+
+        self.assertIn("관련 공지 2개", answer)
+        self.assertIn("1. AI 경진대회", answer)
+        self.assertIn("2. 소프트웨어 공모전", answer)
+        self.assertNotIn("긴 본문", answer)
+        self.assertNotIn("0.9", answer)
+        self.assertIn("1번", answer)
+
+    def test_excludes_previously_shown_notice_ids(self):
+        notices = [
+            {"id": 1, "title": "인턴 공지", "content": "채용 인턴"},
+            {"id": 2, "title": "추가 인턴 공지", "content": "인턴 모집"},
+        ]
+        embeddings = np.asarray(
+            [[1.0, 0.0], [1.0, 0.0]],
+            dtype=np.float32,
+        )
+
+        results = search_notices(
+            model=FakeModel(),
+            question="인턴 공지",
+            notices=notices,
+            notice_embeddings=embeddings,
+            exclude_notice_ids=[1],
+        )
+
+        self.assertEqual([result["notice"]["id"] for result in results], [2])
+
+
+if __name__ == "__main__":
+    unittest.main()

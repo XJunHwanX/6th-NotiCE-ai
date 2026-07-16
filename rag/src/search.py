@@ -1,26 +1,44 @@
-import json
-import re
-from pathlib import Path
-
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-from llm import generate_answer
+if __package__:
+    from .conversation import ConversationState
+    from .db import (
+        ChunkRepositoryError,
+        get_chunk_repository,
+        get_notice_repository,
+        get_rag_search_source,
+    )
+    from .intent import QueryIntent, classify_intent
+    from .llm import generate_answer
+    from .preprocess import DEFAULT_PREPROCESSOR
+    from .retriever import search_notice_chunks
+else:
+    from conversation import ConversationState
+    from db import (
+        ChunkRepositoryError,
+        get_chunk_repository,
+        get_notice_repository,
+        get_rag_search_source,
+    )
+    from intent import QueryIntent, classify_intent
+    from llm import generate_answer
+    from preprocess import DEFAULT_PREPROCESSOR
+    from retriever import search_notice_chunks
 
 
 # =========================================================
 # 기본 설정
 # =========================================================
 
-# search.py를 기준으로 rag 폴더 경로 계산
-RAG_DIR = Path(__file__).resolve().parent.parent
-DATA_PATH = RAG_DIR / "data" / "sample_notices.json"
-
 # 로컬에서 실행할 다국어 임베딩 모델
 MODEL_NAME = "intfloat/multilingual-e5-small"
 
 # 검색할 최대 공지 개수
 TOP_K = 5
+
+# 첫 응답에서 사용자가 고를 수 있도록 보여줄 최대 공지 수
+MAX_RESULT_CHOICES = 3
 
 # 하이브리드 검색 가중치
 SEMANTIC_WEIGHT = 0.75
@@ -35,77 +53,13 @@ MIN_KEYWORD_SCORE = 0.6
 # 1위 결과와 점수 차이가 이 값보다 큰 공지는 제외
 MAX_SCORE_GAP = 0.07
 
-# 한국어 조사를 포함한 짧은 질문 표현은 키워드 검색에서 제외
-STOPWORDS = {
-    "공지",
-    "관련",
-    "알려줘",
-    "알려주세요",
-    "뭐야",
-    "뭔가요",
-    "뭐",
-    "무엇",
-    "무슨",
-    "언제",
-    "언제야",
-    "언제까지",
-    "언제까지야",
-    "언제인가요",
-    "어디",
-    "어디야",
-    "어딘가요",
-    "어떻게",
-    "있어",
-    "있나요",
-    "해줘",
-    "해주세요",
-    "나는",
-    "제가",
-}
-
-KOREAN_SUFFIXES = (
-    "까지",
-    "부터",
-    "에서",
-    "에게",
-    "으로",
-    "하고",
-    "처럼",
-    "보다",
-    "은",
-    "는",
-    "이",
-    "가",
-    "을",
-    "를",
-    "에",
-    "로",
-    "와",
-    "과",
-    "도",
-    "만",
-    "요",
-)
-
-
 # =========================================================
 # 데이터 불러오기
 # =========================================================
 
 def load_notices() -> list[dict]:
-    """JSON 파일에서 샘플 공지를 불러옵니다."""
-    if not DATA_PATH.exists():
-        raise FileNotFoundError(
-            f"공지 데이터 파일을 찾을 수 없습니다: {DATA_PATH}"
-        )
-
-    with DATA_PATH.open("r", encoding="utf-8") as file:
-        notices = json.load(file)
-
-    if not isinstance(notices, list):
-        raise ValueError("공지 데이터는 JSON 배열 형태여야 합니다.")
-
-    return notices
+    """환경 설정에 따라 Supabase 또는 샘플 JSON에서 공지를 불러옵니다."""
+    return get_notice_repository().fetch_notices()
 
 
 def create_notice_text(notice: dict) -> str:
@@ -115,8 +69,8 @@ def create_notice_text(notice: dict) -> str:
     """
     return (
         f"제목: {notice.get('title', '')}\n"
-        f"카테고리: {notice.get('category', '')}\n"
-        f"작성일: {notice.get('posted_at', '')}\n"
+        f"카테고리: {notice.get('category') or ''}\n"
+        f"작성일: {notice.get('published_at', '')}\n"
         f"내용: {notice.get('content', '')}"
     )
 
@@ -130,45 +84,23 @@ def normalize_text(text: str) -> str:
     return " ".join(text.lower().split())
 
 
-def strip_korean_suffix(token: str) -> str:
-    """질문 키워드 끝에 붙은 대표적인 한국어 조사를 제거합니다."""
-    for suffix in KOREAN_SUFFIXES:
-        if token.endswith(suffix) and len(token) > len(suffix) + 1:
-            return token[: -len(suffix)]
-
-    return token
-
-
 def extract_keywords(question: str) -> list[str]:
     """사용자 질문에서 키워드 검색에 사용할 단어를 추출합니다."""
-    tokens = re.findall(r"[0-9a-zA-Z가-힣]+", question.lower())
-    keywords = []
-
-    for token in tokens:
-        keyword = strip_korean_suffix(token)
-
-        if keyword in STOPWORDS:
-            continue
-
-        if len(keyword) < 2 and not keyword.isdigit():
-            continue
-
-        if keyword not in keywords:
-            keywords.append(keyword)
-
-    return keywords
+    return DEFAULT_PREPROCESSOR.extract_keywords(question)
 
 
 def calculate_keyword_score(
     question: str,
     notice: dict,
+    keywords: list[str] | None = None,
 ) -> tuple[float, list[str]]:
     """
     질문 키워드가 공지 제목/카테고리/본문에 얼마나 직접 등장하는지 계산합니다.
 
     제목과 카테고리에 등장한 키워드는 본문보다 조금 더 높은 점수를 줍니다.
     """
-    keywords = extract_keywords(question)
+    if keywords is None:
+        keywords = extract_keywords(question)
 
     if not keywords:
         return 0.0, []
@@ -240,6 +172,7 @@ def search_notices(
     notices: list[dict],
     notice_embeddings: np.ndarray,
     top_k: int = TOP_K,
+    exclude_notice_ids: tuple | list | set | None = None,
 ) -> list[dict]:
     """
     의미 검색과 키워드 검색을 함께 사용해 관련 공지를 반환합니다.
@@ -255,15 +188,21 @@ def search_notices(
     )
 
     results = []
+    excluded_ids = set(exclude_notice_ids or ())
+    keywords = extract_keywords(question)
 
     # 모든 벡터가 정규화되어 있으므로 내적 결과가 코사인 유사도와 같음
     semantic_scores = notice_embeddings @ question_embedding
 
     for index, notice in enumerate(notices):
+        if notice.get("id") in excluded_ids:
+            continue
+
         semantic_score = float(semantic_scores[index])
         keyword_score, matched_keywords = calculate_keyword_score(
             question=question,
             notice=notice,
+            keywords=keywords,
         )
         hybrid_score = (
             semantic_score * SEMANTIC_WEIGHT
@@ -322,28 +261,25 @@ def get_relevant_notices(
     return relevant_results
 
 
+def create_result_selection_answer(results: list[dict]) -> str:
+    """본문을 노출하지 않고 선택 가능한 공지 제목 목록을 만듭니다."""
+    lines = [f"관련 공지 {len(results)}개를 찾았습니다.", ""]
+
+    for index, result in enumerate(results, start=1):
+        notice = result["notice"]
+        title = notice.get("title") or "제목 없음"
+        lines.append(f"{index}. {title}")
+
+    lines.extend([
+        "",
+        "궁금한 공지의 번호나 제목을 입력해주세요. 예: 1번",
+    ])
+    return "\n".join(lines)
+
+
 # =========================================================
 # 결과 출력
 # =========================================================
-
-def print_relevant_results(results: list[dict]) -> None:
-    """관련성이 있다고 판단된 공지들을 출력합니다."""
-    print("\n===== 관련 공지 검색 결과 =====")
-    print(f"관련 공지 {len(results)}개를 찾았습니다.")
-
-    for rank, result in enumerate(results, start=1):
-        notice = result["notice"]
-
-        print(f"\n{rank}. {notice.get('title', '제목 없음')}")
-        print(f"카테고리: {notice.get('category', '없음')}")
-        print(f"하이브리드 점수: {result['hybrid_score']:.4f}")
-        print(f"의미 검색 점수: {result['semantic_score']:.4f}")
-        print(f"키워드 검색 점수: {result['keyword_score']:.4f}")
-        print(f"매칭 키워드: {', '.join(result['matched_keywords']) or '없음'}")
-        print(f"작성일: {notice.get('posted_at', '없음')}")
-        print(f"내용: {notice.get('content', '없음')}")
-        print(f"URL: {notice.get('url', '없음')}")
-
 
 def print_search_failure(results: list[dict]) -> None:
     """관련 공지를 찾지 못했을 때 검색 정보를 출력합니다."""
@@ -373,28 +309,46 @@ def main() -> None:
     print("임베딩 모델을 불러오는 중입니다.")
 
     model = SentenceTransformer(MODEL_NAME)
+    search_source = get_rag_search_source()
+    notices = []
+    notice_embeddings = None
+    chunk_repository = None
 
-    notices = load_notices()
+    if search_source == "chunks":
+        chunk_repository = get_chunk_repository()
+        print("Supabase notice_chunks RPC 검색 모드입니다.")
+    else:
+        repository = get_notice_repository()
+        notices = repository.fetch_notices()
 
-    if not notices:
-        print("저장된 공지가 없습니다.")
-        return
+        if not notices:
+            print("저장된 공지가 없습니다.")
+            return
 
-    print(f"공지 {len(notices)}개를 불러왔습니다.")
-    print("공지 임베딩을 생성합니다.")
+        print(
+            f"{repository.source_name}에서 "
+            f"공지 {len(notices)}개를 불러왔습니다."
+        )
+        print("공지 임베딩을 생성합니다.")
 
-    notice_embeddings = embed_notices(
-        model=model,
-        notices=notices,
-    )
+        notice_embeddings = embed_notices(
+            model=model,
+            notices=notices,
+        )
 
-    print("임베딩 생성 완료")
-    print(f"임베딩 배열 크기: {notice_embeddings.shape}")
+        print("임베딩 생성 완료")
+        print(f"임베딩 배열 크기: {notice_embeddings.shape}")
+
+    conversation = ConversationState()
 
     while True:
-        question = input(
-            "\n질문을 입력하세요. 종료하려면 exit 입력: "
-        ).strip()
+        try:
+            question = input(
+                "\n질문을 입력하세요. 종료하려면 exit 입력: "
+            ).strip()
+        except EOFError:
+            print("\n입력이 종료되어 프로그램을 종료합니다.")
+            break
 
         if question.lower() == "exit":
             print("프로그램을 종료합니다.")
@@ -404,27 +358,117 @@ def main() -> None:
             print("질문을 입력해주세요.")
             continue
 
-        search_results = search_notices(
-            model=model,
-            question=question,
-            notices=notices,
-            notice_embeddings=notice_embeddings,
-            top_k=TOP_K,
+        selected_result, selection_error = conversation.select_candidate(question)
+
+        if selection_error:
+            print(f"\n===== 챗봇 답변 =====\n{selection_error}")
+            continue
+
+        if selected_result:
+            answer = generate_answer(
+                question=(
+                    "사용자가 선택한 공지입니다. 공지의 목적과 핵심 내용을 "
+                    "간단히 요약해주세요."
+                ),
+                relevant_results=[selected_result],
+                answer_mode="summary",
+            )
+            print("\n===== 챗봇 답변 =====")
+            print(answer)
+            continue
+
+        processed_query = DEFAULT_PREPROCESSOR.process(question)
+        intent = classify_intent(
+            processed_query.normalized,
+            has_context=conversation.has_context,
         )
+
+        if (
+            conversation.active_result
+            and intent in {QueryIntent.FOLLOW_UP, QueryIntent.NOTICE_SUMMARY}
+        ):
+            answer = generate_answer(
+                question=processed_query.normalized,
+                relevant_results=[conversation.active_result],
+                answer_mode="focused",
+            )
+            print("\n===== 챗봇 답변 =====")
+            print(answer)
+            continue
+
+        if (
+            conversation.has_candidates
+            and conversation.active_result is None
+            and intent == QueryIntent.FOLLOW_UP
+        ):
+            print(
+                "\n===== 챗봇 답변 =====\n"
+                "먼저 궁금한 공지의 번호나 제목을 선택해주세요."
+            )
+            continue
+
+        resolution = conversation.resolve(processed_query, intent)
+
+        if resolution.clarification:
+            print(f"\n===== 챗봇 답변 =====\n{resolution.clarification}")
+            continue
+
+        if resolution.search_question != question:
+            print(f"질문 해석: {resolution.search_question}")
+
+        try:
+            if search_source == "chunks":
+                search_results = search_notice_chunks(
+                    model=model,
+                    question=resolution.search_question,
+                    repository=chunk_repository,
+                    top_k=TOP_K,
+                    semantic_weight=SEMANTIC_WEIGHT,
+                    keyword_weight=KEYWORD_WEIGHT,
+                    exclude_notice_ids=resolution.exclude_notice_ids,
+                )
+            else:
+                search_results = search_notices(
+                    model=model,
+                    question=resolution.search_question,
+                    notices=notices,
+                    notice_embeddings=notice_embeddings,
+                    top_k=TOP_K,
+                    exclude_notice_ids=resolution.exclude_notice_ids,
+                )
+        except ChunkRepositoryError as error:
+            print(f"\n청크 검색을 사용할 수 없습니다: {error}")
+            print(
+                "DB 준비 전에는 RAG_SEARCH_SOURCE=notices로 실행해주세요."
+            )
+            continue
 
         relevant_results = get_relevant_notices(
             results=search_results,
         )
 
         if not relevant_results:
+            if resolution.intent == QueryIntent.MORE_RESULTS:
+                print("\n현재 저장된 공지 중 추가 결과가 없습니다.")
+                continue
+
             print_search_failure(search_results)
             continue
 
-        print_relevant_results(relevant_results)
-        
+        displayed_results = relevant_results[:MAX_RESULT_CHOICES]
+        conversation.record_results(resolution, displayed_results)
+
+        if len(displayed_results) > 1:
+            print("\n===== 챗봇 답변 =====")
+            print(create_result_selection_answer(displayed_results))
+            continue
+
+        conversation.active_result = displayed_results[0]
+
         answer = generate_answer(
-            question=question,
-            relevant_results=relevant_results,
+            question=resolution.search_question,
+            relevant_results=displayed_results,
+            answer_mode="focused",
         )
 
         print("\n===== 챗봇 답변 =====")
