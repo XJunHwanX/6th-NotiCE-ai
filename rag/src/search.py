@@ -334,6 +334,11 @@ def hydrate_result_notice(
     }
 
 
+def should_answer_without_selection(route: QueryRoute | None) -> bool:
+    """사용자 질문에 바로 답해야 하는 검색 경로인지 반환합니다."""
+    return route == QueryRoute.EXAM_NOTICE_SEARCH
+
+
 # =========================================================
 # 결과 출력
 # =========================================================
@@ -440,19 +445,22 @@ def main() -> None:
                 except NoticeRepositoryError as error:
                     print(f"공지 전체 본문을 불러오지 못했습니다: {error}")
 
+            answer_question = (
+                conversation.pending_answer_question
+                or conversation.last_search_query
+                or question
+            )
             answer = generate_answer(
-                question=(
-                    "사용자가 선택한 공지입니다. 공지의 목적과 핵심 내용을 "
-                    "간단히 요약해주세요."
-                ),
+                question=answer_question,
                 relevant_results=[selected_result],
-                answer_mode="summary",
+                answer_mode="focused",
             )
             print("\n===== 챗봇 답변 =====")
             print(answer)
             continue
 
         processed_query = preprocessor.process(question)
+        answer_question = processed_query.normalized
 
         if processed_query.resolved_aliases:
             resolved_text = ", ".join(
@@ -518,7 +526,7 @@ def main() -> None:
                     continue
 
                 answer = generate_answer(
-                    question=plan.search_query,
+                    question=answer_question,
                     relevant_results=[conversation.active_result],
                     answer_mode="focused",
                 )
@@ -546,6 +554,9 @@ def main() -> None:
             )
 
         resolution = conversation.resolve(processed_query, intent)
+
+        if intent == QueryIntent.MORE_RESULTS:
+            answer_question = resolution.search_question
 
         if resolution.clarification:
             print(f"\n===== 챗봇 답변 =====\n{resolution.clarification}")
@@ -601,7 +612,37 @@ def main() -> None:
             continue
 
         displayed_results = relevant_results[:MAX_RESULT_CHOICES]
-        conversation.record_results(resolution, displayed_results)
+        conversation.record_results(
+            resolution,
+            displayed_results,
+            answer_question=answer_question,
+        )
+
+        if should_answer_without_selection(query_route):
+            direct_results = displayed_results
+
+            if search_source == "chunks":
+                try:
+                    direct_results = [
+                        hydrate_result_notice(
+                            result,
+                            repository=notice_repository,
+                        )
+                        for result in displayed_results
+                    ]
+                except NoticeRepositoryError as error:
+                    print(f"공지 전체 본문을 불러오지 못했습니다: {error}")
+
+            conversation.candidate_results = direct_results
+            conversation.active_result = direct_results[0]
+            answer = generate_answer(
+                question=answer_question,
+                relevant_results=direct_results,
+                answer_mode="focused",
+            )
+            print("\n===== 챗봇 답변 =====")
+            print(answer)
+            continue
 
         if len(displayed_results) > 1:
             print("\n===== 챗봇 답변 =====")
@@ -622,7 +663,7 @@ def main() -> None:
         conversation.active_result = active_result
 
         answer = generate_answer(
-            question=resolution.search_question,
+            question=answer_question,
             relevant_results=[active_result],
             answer_mode="focused",
         )

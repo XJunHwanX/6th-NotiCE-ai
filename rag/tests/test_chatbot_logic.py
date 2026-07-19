@@ -10,7 +10,9 @@ from rag.src.search import (
     create_result_selection_answer,
     hydrate_result_notice,
     search_notices,
+    should_answer_without_selection,
 )
+from rag.src.router import QueryRoute
 
 
 class FakeModel:
@@ -150,6 +152,22 @@ class ConversationStateTests(unittest.TestCase):
         self.assertEqual(self.state.active_result["notice"]["id"], 20)
         self.assertEqual(self.state.referenced_notice_ids, [20])
 
+    def test_keeps_original_answer_question_while_user_selects_notice(self):
+        query = self.preprocessor.process("알고리즘 시험 언제야?")
+        resolution = self.state.resolve(query, QueryIntent.EXAM_LOCATION)
+
+        self.state.record_results(
+            resolution,
+            [{"notice": {"id": 10, "title": "기말고사 일정"}}],
+            answer_question="알고리즘 시험 언제야?",
+        )
+        self.state.select_candidate("1번")
+
+        self.assertEqual(
+            self.state.pending_answer_question,
+            "알고리즘 시험 언제야?",
+        )
+
     def test_rejects_candidate_number_out_of_range(self):
         self.state.candidate_results = [
             {"notice": {"id": 10, "title": "첫 번째 대회"}},
@@ -244,6 +262,14 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(repository.notice_id, 10)
         self.assertEqual(hydrated["notice"]["content"], "전체 시험 일정표")
         self.assertEqual(hydrated["hybrid_score"], 0.9)
+
+    def test_exam_route_skips_notice_selection(self):
+        self.assertTrue(
+            should_answer_without_selection(QueryRoute.EXAM_NOTICE_SEARCH)
+        )
+        self.assertFalse(
+            should_answer_without_selection(QueryRoute.NOTICE_SEARCH)
+        )
 
 
 if __name__ == "__main__":

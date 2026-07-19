@@ -1,6 +1,7 @@
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -116,12 +117,15 @@ def generate_answer(
     question: str,
     relevant_results: list[dict],
     answer_mode: str = "focused",
+    now: datetime | None = None,
+    client: Any | None = None,
 ) -> str:
     """검색된 공지를 근거로 사용자 질문에 답변합니다."""
     if not relevant_results:
         return "현재 저장된 공지에서는 관련 내용을 찾지 못했습니다."
 
     context = create_context(relevant_results)
+    current_datetime = now or datetime.now(ZoneInfo("Asia/Seoul"))
     mode_instruction = (
         "선택한 공지의 목적을 한 문장으로 설명하고, 핵심 정보만 최대 4개의 "
         "짧은 항목으로 요약하세요."
@@ -144,6 +148,13 @@ def generate_answer(
 7. 출처 목록은 시스템이 별도로 붙이므로 답변 본문에는 URL 목록을 반복하지 마세요.
 8. 공지 원문 전체를 옮기거나 긴 문단으로 답하지 마세요.
 9. {mode_instruction}
+10. 시험 날짜, 시간, 장소 질문은 정확히 일치하는 과목 행을 찾아 해당 값을 먼저
+    말하고, 공지 전체 요약으로 바꾸지 마세요.
+11. 여러 학기의 일정이 함께 있으면 현재 시각과 공지 작성일을 기준으로 가장 최근
+    학기의 정보를 우선하고, 어느 학기인지 답변에 표시하세요.
+
+[현재 시각]
+{current_datetime.isoformat()} (Asia/Seoul)
 
 [사용자 질문]
 {question}
@@ -153,7 +164,7 @@ def generate_answer(
 """.strip()
 
     try:
-        response = get_client().models.generate_content(
+        response = (client or get_client()).models.generate_content(
             model=LLM_MODEL_NAME,
             contents=prompt,
         )

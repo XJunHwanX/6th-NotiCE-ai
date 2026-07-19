@@ -31,6 +31,7 @@ class ConversationState:
     shown_notice_ids: list[Any] = field(default_factory=list)
     candidate_results: list[dict] = field(default_factory=list)
     active_result: dict | None = None
+    pending_answer_question: str | None = None
 
     @property
     def has_context(self) -> bool:
@@ -141,6 +142,7 @@ class ConversationState:
         self,
         resolution: QueryResolution,
         results: list[dict],
+        answer_question: str | None = None,
     ) -> None:
         notice_ids = []
 
@@ -152,6 +154,9 @@ class ConversationState:
         self.referenced_notice_ids = notice_ids
         self.candidate_results = list(results)
         self.active_result = None
+        self.pending_answer_question = (
+            answer_question or resolution.search_question
+        )
 
         if resolution.intent == QueryIntent.MORE_RESULTS:
             for notice_id in notice_ids:
@@ -178,4 +183,5 @@ class ConversationState:
                 if self.active_result
                 else None
             ),
+            "pending_answer_question": self.pending_answer_question,
         }
