@@ -11,14 +11,6 @@ except ImportError:  # pragma: no cover - fallback is tested without the package
     Kiwi = None
 
 
-DEFAULT_ALIASES = {
-    "배알골": "배OO 교수님 알고리즘",
-    "알골": "알고리즘",
-    "컴구": "컴퓨터구조",
-    "운체": "운영체제",
-    "과사": "학과사무실",
-}
-
 SPACING_REPLACEMENTS = {
     "인턴공지": "인턴 공지",
     "장학금공지": "장학금 공지",
@@ -100,10 +92,17 @@ KOREAN_SUFFIXES = (
 
 
 @dataclass(frozen=True)
+class ResolvedAlias:
+    alias: str
+    meaning: str
+
+
+@dataclass(frozen=True)
 class ProcessedQuery:
     raw: str
     normalized: str
     keywords: tuple[str, ...]
+    resolved_aliases: tuple[ResolvedAlias, ...] = ()
 
 
 @lru_cache(maxsize=1)
@@ -127,17 +126,27 @@ class QueryPreprocessor:
     """검색 전에 사용자 질문을 정규화하고 핵심 키워드를 추출합니다."""
 
     def __init__(self, aliases: Mapping[str, str] | None = None) -> None:
-        self.aliases = {**DEFAULT_ALIASES, **(aliases or {})}
+        self.aliases = dict(aliases or {})
 
-    def normalize(self, question: str) -> str:
+    def resolve_aliases(
+        self,
+        question: str,
+    ) -> tuple[str, tuple[ResolvedAlias, ...]]:
         normalized = " ".join(question.strip().split())
+        resolved_aliases = []
 
-        for alias, canonical_text in sorted(
+        for alias, meaning in sorted(
             self.aliases.items(),
             key=lambda item: len(item[0]),
             reverse=True,
         ):
-            normalized = normalized.replace(alias, canonical_text)
+            if alias not in normalized:
+                continue
+
+            normalized = normalized.replace(alias, meaning)
+            resolved_aliases.append(
+                ResolvedAlias(alias=alias, meaning=meaning)
+            )
 
         for before, after in sorted(
             SPACING_REPLACEMENTS.items(),
@@ -146,10 +155,16 @@ class QueryPreprocessor:
         ):
             normalized = normalized.replace(before, after)
 
-        return " ".join(normalized.split())
+        return (
+            " ".join(normalized.split()),
+            tuple(resolved_aliases),
+        )
 
-    def extract_keywords(self, question: str) -> list[str]:
-        normalized = self.normalize(question)
+    def normalize(self, question: str) -> str:
+        normalized, _ = self.resolve_aliases(question)
+        return normalized
+
+    def _extract_keywords_from_normalized(self, normalized: str) -> list[str]:
         kiwi = _get_kiwi()
 
         if kiwi is None:
@@ -178,12 +193,17 @@ class QueryPreprocessor:
 
         return keywords
 
-    def process(self, question: str) -> ProcessedQuery:
+    def extract_keywords(self, question: str) -> list[str]:
         normalized = self.normalize(question)
+        return self._extract_keywords_from_normalized(normalized)
+
+    def process(self, question: str) -> ProcessedQuery:
+        normalized, resolved_aliases = self.resolve_aliases(question)
         return ProcessedQuery(
             raw=question,
             normalized=normalized,
-            keywords=tuple(self.extract_keywords(normalized)),
+            keywords=tuple(self._extract_keywords_from_normalized(normalized)),
+            resolved_aliases=resolved_aliases,
         )
 
 

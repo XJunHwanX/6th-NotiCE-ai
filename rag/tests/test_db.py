@@ -3,11 +3,14 @@ import unittest
 from unittest.mock import patch
 
 from rag.src.db import (
+    AliasRepositoryError,
     JsonNoticeRepository,
+    SupabaseAliasRepository,
     SupabaseChunkRepository,
     SupabaseNoticeRepository,
     get_notice_repository,
     get_rag_search_source,
+    validate_aliases,
 )
 
 
@@ -53,6 +56,21 @@ class FakeRpcSession:
         return FakeResponse(self.responses[rpc_name])
 
 
+class FakeGetSession:
+    def __init__(self, rows):
+        self.rows = rows
+        self.requests = []
+
+    def get(self, url, headers, params, timeout):
+        self.requests.append({
+            "url": url,
+            "headers": headers,
+            "params": params,
+            "timeout": timeout,
+        })
+        return FakeResponse(self.rows)
+
+
 def build_notice(notice_id):
     return {
         "id": notice_id,
@@ -87,6 +105,52 @@ class SupabaseNoticeRepositoryTests(unittest.TestCase):
         self.assertNotIn("posted_at", notices[0])
         self.assertEqual(len(session.requests), 2)
         self.assertEqual(session.requests[0]["headers"], {"apikey": "test-key"})
+
+    def test_fetches_single_notice_by_id(self):
+        session = FakeGetSession([build_notice(7)])
+        repository = SupabaseNoticeRepository(
+            url="https://example.supabase.co",
+            key="test-key",
+            session=session,
+        )
+
+        notice = repository.fetch_notice(7)
+
+        self.assertEqual(notice["id"], 7)
+        self.assertEqual(session.requests[0]["params"]["id"], "eq.7")
+        self.assertEqual(session.requests[0]["params"]["limit"], 1)
+
+
+class SupabaseAliasRepositoryTests(unittest.TestCase):
+    def test_fetches_alias_dictionary_rows(self):
+        rows = [
+            {"id": 1, "alias": "배알골", "meaning": "배OO 교수의 알고리즘 과목"},
+            {"id": 2, "alias": "과사", "meaning": "컴퓨터공학과 학과사무실"},
+        ]
+        session = FakeGetSession(rows)
+        repository = SupabaseAliasRepository(
+            url="https://example.supabase.co",
+            key="test-key",
+            session=session,
+        )
+
+        aliases = repository.fetch_aliases()
+
+        self.assertEqual(aliases, rows)
+        self.assertTrue(session.requests[0]["url"].endswith("/rest/v1/aliases"))
+        self.assertEqual(
+            session.requests[0]["params"]["select"],
+            "id,alias,meaning",
+        )
+
+    def test_rejects_duplicate_alias_rows(self):
+        rows = [
+            {"id": 1, "alias": "알골", "meaning": "알고리즘"},
+            {"id": 2, "alias": "알골", "meaning": "알고리즘 과목"},
+        ]
+
+        with self.assertRaises(AliasRepositoryError):
+            validate_aliases(rows)
 
 
 class JsonNoticeRepositoryTests(unittest.TestCase):

@@ -6,10 +6,10 @@ import numpy as np
 
 if __package__:
     from .db import ChunkRepository
-    from .preprocess import DEFAULT_PREPROCESSOR
+    from .preprocess import DEFAULT_PREPROCESSOR, QueryPreprocessor
 else:
     from db import ChunkRepository
-    from preprocess import DEFAULT_PREPROCESSOR
+    from preprocess import DEFAULT_PREPROCESSOR, QueryPreprocessor
 
 
 class EmbeddingModel(Protocol):
@@ -148,6 +148,7 @@ def search_notice_chunks(
     category_filter: str | None = None,
     deadline_from: str | None = None,
     exclude_notice_ids: tuple | list | set | None = None,
+    preprocessor: QueryPreprocessor = DEFAULT_PREPROCESSOR,
 ) -> list[dict]:
     """Supabase의 벡터/키워드 RPC 결과를 공지 단위로 병합합니다."""
     query_embedding = np.asarray(
@@ -157,7 +158,7 @@ def search_notice_chunks(
         ),
         dtype=np.float32,
     )
-    keywords = DEFAULT_PREPROCESSOR.extract_keywords(question)
+    keywords = preprocessor.extract_keywords(question)
     match_count = max(top_k * 4, top_k)
 
     semantic_rows = repository.match_notice_chunks(
@@ -185,4 +186,3 @@ def search_notice_chunks(
     )
 
     return _group_chunks_by_notice(chunks, top_k=top_k)
-

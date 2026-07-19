@@ -1,30 +1,52 @@
+from dataclasses import replace
+
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
 if __package__:
     from .conversation import ConversationState
     from .db import (
+        AliasRepositoryError,
         ChunkRepositoryError,
+        NoticeRepository,
+        NoticeRepositoryError,
+        get_alias_repository,
         get_chunk_repository,
         get_notice_repository,
         get_rag_search_source,
     )
     from .intent import QueryIntent, classify_intent
-    from .llm import generate_answer
-    from .preprocess import DEFAULT_PREPROCESSOR
+    from .llm import generate_answer, generate_general_answer
+    from .preprocess import DEFAULT_PREPROCESSOR, QueryPreprocessor
     from .retriever import search_notice_chunks
+    from .router import (
+        QueryRoute,
+        get_current_datetime,
+        plan_question,
+        route_to_intent,
+    )
 else:
     from conversation import ConversationState
     from db import (
+        AliasRepositoryError,
         ChunkRepositoryError,
+        NoticeRepository,
+        NoticeRepositoryError,
+        get_alias_repository,
         get_chunk_repository,
         get_notice_repository,
         get_rag_search_source,
     )
     from intent import QueryIntent, classify_intent
-    from llm import generate_answer
-    from preprocess import DEFAULT_PREPROCESSOR
+    from llm import generate_answer, generate_general_answer
+    from preprocess import DEFAULT_PREPROCESSOR, QueryPreprocessor
     from retriever import search_notice_chunks
+    from router import (
+        QueryRoute,
+        get_current_datetime,
+        plan_question,
+        route_to_intent,
+    )
 
 
 # =========================================================
@@ -84,15 +106,19 @@ def normalize_text(text: str) -> str:
     return " ".join(text.lower().split())
 
 
-def extract_keywords(question: str) -> list[str]:
+def extract_keywords(
+    question: str,
+    preprocessor: QueryPreprocessor = DEFAULT_PREPROCESSOR,
+) -> list[str]:
     """사용자 질문에서 키워드 검색에 사용할 단어를 추출합니다."""
-    return DEFAULT_PREPROCESSOR.extract_keywords(question)
+    return preprocessor.extract_keywords(question)
 
 
 def calculate_keyword_score(
     question: str,
     notice: dict,
     keywords: list[str] | None = None,
+    preprocessor: QueryPreprocessor = DEFAULT_PREPROCESSOR,
 ) -> tuple[float, list[str]]:
     """
     질문 키워드가 공지 제목/카테고리/본문에 얼마나 직접 등장하는지 계산합니다.
@@ -100,7 +126,7 @@ def calculate_keyword_score(
     제목과 카테고리에 등장한 키워드는 본문보다 조금 더 높은 점수를 줍니다.
     """
     if keywords is None:
-        keywords = extract_keywords(question)
+        keywords = extract_keywords(question, preprocessor=preprocessor)
 
     if not keywords:
         return 0.0, []
@@ -173,6 +199,7 @@ def search_notices(
     notice_embeddings: np.ndarray,
     top_k: int = TOP_K,
     exclude_notice_ids: tuple | list | set | None = None,
+    preprocessor: QueryPreprocessor = DEFAULT_PREPROCESSOR,
 ) -> list[dict]:
     """
     의미 검색과 키워드 검색을 함께 사용해 관련 공지를 반환합니다.
@@ -189,7 +216,7 @@ def search_notices(
 
     results = []
     excluded_ids = set(exclude_notice_ids or ())
-    keywords = extract_keywords(question)
+    keywords = extract_keywords(question, preprocessor=preprocessor)
 
     # 모든 벡터가 정규화되어 있으므로 내적 결과가 코사인 유사도와 같음
     semantic_scores = notice_embeddings @ question_embedding
@@ -203,6 +230,7 @@ def search_notices(
             question=question,
             notice=notice,
             keywords=keywords,
+            preprocessor=preprocessor,
         )
         hybrid_score = (
             semantic_score * SEMANTIC_WEIGHT
@@ -277,6 +305,35 @@ def create_result_selection_answer(results: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def create_query_preprocessor(alias_rows: list[dict]) -> QueryPreprocessor:
+    aliases = {
+        str(row["alias"]): str(row["meaning"])
+        for row in alias_rows
+    }
+    return QueryPreprocessor(aliases=aliases)
+
+
+def hydrate_result_notice(
+    result: dict,
+    repository: NoticeRepository,
+) -> dict:
+    """선택된 검색 결과의 부분 청크를 공지 전체 본문으로 교체합니다."""
+    notice_id = result.get("notice", {}).get("id")
+
+    if notice_id is None:
+        return result
+
+    full_notice = repository.fetch_notice(notice_id)
+
+    if full_notice is None:
+        return result
+
+    return {
+        **result,
+        "notice": full_notice,
+    }
+
+
 # =========================================================
 # 결과 출력
 # =========================================================
@@ -313,20 +370,28 @@ def main() -> None:
     notices = []
     notice_embeddings = None
     chunk_repository = None
+    notice_repository = get_notice_repository()
+
+    try:
+        alias_rows = get_alias_repository().fetch_aliases()
+        preprocessor = create_query_preprocessor(alias_rows)
+        print(f"은어 사전 {len(alias_rows)}개를 불러왔습니다.")
+    except AliasRepositoryError as error:
+        preprocessor = DEFAULT_PREPROCESSOR
+        print(f"은어 사전을 불러오지 못해 기본 검색으로 진행합니다: {error}")
 
     if search_source == "chunks":
         chunk_repository = get_chunk_repository()
         print("Supabase notice_chunks RPC 검색 모드입니다.")
     else:
-        repository = get_notice_repository()
-        notices = repository.fetch_notices()
+        notices = notice_repository.fetch_notices()
 
         if not notices:
             print("저장된 공지가 없습니다.")
             return
 
         print(
-            f"{repository.source_name}에서 "
+            f"{notice_repository.source_name}에서 "
             f"공지 {len(notices)}개를 불러왔습니다."
         )
         print("공지 임베딩을 생성합니다.")
@@ -365,6 +430,16 @@ def main() -> None:
             continue
 
         if selected_result:
+            if search_source == "chunks":
+                try:
+                    selected_result = hydrate_result_notice(
+                        selected_result,
+                        repository=notice_repository,
+                    )
+                    conversation.active_result = selected_result
+                except NoticeRepositoryError as error:
+                    print(f"공지 전체 본문을 불러오지 못했습니다: {error}")
+
             answer = generate_answer(
                 question=(
                     "사용자가 선택한 공지입니다. 공지의 목적과 핵심 내용을 "
@@ -377,15 +452,22 @@ def main() -> None:
             print(answer)
             continue
 
-        processed_query = DEFAULT_PREPROCESSOR.process(question)
-        intent = classify_intent(
+        processed_query = preprocessor.process(question)
+
+        if processed_query.resolved_aliases:
+            resolved_text = ", ".join(
+                f"{match.alias} → {match.meaning}"
+                for match in processed_query.resolved_aliases
+            )
+            print(f"은어 해석: {resolved_text}")
+        rule_intent = classify_intent(
             processed_query.normalized,
             has_context=conversation.has_context,
         )
 
         if (
             conversation.active_result
-            and intent in {QueryIntent.FOLLOW_UP, QueryIntent.NOTICE_SUMMARY}
+            and rule_intent in {QueryIntent.FOLLOW_UP, QueryIntent.NOTICE_SUMMARY}
         ):
             answer = generate_answer(
                 question=processed_query.normalized,
@@ -399,13 +481,69 @@ def main() -> None:
         if (
             conversation.has_candidates
             and conversation.active_result is None
-            and intent == QueryIntent.FOLLOW_UP
+            and rule_intent in {QueryIntent.FOLLOW_UP, QueryIntent.NOTICE_SUMMARY}
         ):
             print(
                 "\n===== 챗봇 답변 =====\n"
                 "먼저 궁금한 공지의 번호나 제목을 선택해주세요."
             )
             continue
+
+        query_route = None
+
+        if rule_intent == QueryIntent.MORE_RESULTS:
+            intent = rule_intent
+        elif rule_intent == QueryIntent.NOTICE_SUMMARY:
+            print(
+                "\n===== 챗봇 답변 =====\n"
+                "요약할 공지를 먼저 검색하거나 선택해주세요."
+            )
+            continue
+        else:
+            plan = plan_question(
+                question=processed_query.normalized,
+                has_context=conversation.has_context,
+                has_active_notice=conversation.active_result is not None,
+            )
+            query_route = plan.route
+            route_source = "LLM" if plan.source == "llm" else "기본 규칙"
+            print(f"질문 경로: {plan.route.value} ({route_source})")
+
+            if plan.route == QueryRoute.SELECTED_NOTICE_ANSWER:
+                if conversation.active_result is None:
+                    print(
+                        "\n===== 챗봇 답변 =====\n"
+                        "먼저 궁금한 공지를 검색하고 선택해주세요."
+                    )
+                    continue
+
+                answer = generate_answer(
+                    question=plan.search_query,
+                    relevant_results=[conversation.active_result],
+                    answer_mode="focused",
+                )
+                print("\n===== 챗봇 답변 =====")
+                print(answer)
+                continue
+
+            if plan.route == QueryRoute.GENERAL_CHAT:
+                answer = generate_general_answer(plan.search_query)
+                print("\n===== 챗봇 답변 =====")
+                print(answer)
+                continue
+
+            if plan.route == QueryRoute.CLARIFICATION:
+                clarification = plan.clarification or (
+                    "어떤 종류의 공지를 찾는지 조금 더 알려주세요."
+                )
+                print(f"\n===== 챗봇 답변 =====\n{clarification}")
+                continue
+
+            intent = route_to_intent(plan.route)
+            processed_query = replace(
+                processed_query,
+                normalized=plan.search_query,
+            )
 
         resolution = conversation.resolve(processed_query, intent)
 
@@ -425,7 +563,13 @@ def main() -> None:
                     top_k=TOP_K,
                     semantic_weight=SEMANTIC_WEIGHT,
                     keyword_weight=KEYWORD_WEIGHT,
+                    deadline_from=(
+                        get_current_datetime().isoformat()
+                        if query_route == QueryRoute.OPEN_NOTICE_SEARCH
+                        else None
+                    ),
                     exclude_notice_ids=resolution.exclude_notice_ids,
+                    preprocessor=preprocessor,
                 )
             else:
                 search_results = search_notices(
@@ -435,6 +579,7 @@ def main() -> None:
                     notice_embeddings=notice_embeddings,
                     top_k=TOP_K,
                     exclude_notice_ids=resolution.exclude_notice_ids,
+                    preprocessor=preprocessor,
                 )
         except ChunkRepositoryError as error:
             print(f"\n청크 검색을 사용할 수 없습니다: {error}")
@@ -463,11 +608,22 @@ def main() -> None:
             print(create_result_selection_answer(displayed_results))
             continue
 
-        conversation.active_result = displayed_results[0]
+        active_result = displayed_results[0]
+
+        if search_source == "chunks":
+            try:
+                active_result = hydrate_result_notice(
+                    active_result,
+                    repository=notice_repository,
+                )
+            except NoticeRepositoryError as error:
+                print(f"공지 전체 본문을 불러오지 못했습니다: {error}")
+
+        conversation.active_result = active_result
 
         answer = generate_answer(
             question=resolution.search_question,
-            relevant_results=displayed_results,
+            relevant_results=[active_result],
             answer_mode="focused",
         )
 

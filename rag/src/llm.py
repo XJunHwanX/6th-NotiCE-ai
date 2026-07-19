@@ -1,5 +1,7 @@
 import os
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from google import genai
@@ -78,6 +80,36 @@ def create_source_section(results: list[dict]) -> str:
 def append_source_section(answer: str, results: list[dict]) -> str:
     """LLM이 출처를 빠뜨려도 코드에서 항상 출처를 붙입니다."""
     return f"{answer.strip()}{create_source_section(results)}"
+
+
+def generate_general_answer(
+    question: str,
+    now: datetime | None = None,
+) -> str:
+    """공지 검색이 필요 없는 짧은 대화에 답변합니다."""
+    current_datetime = now or datetime.now(ZoneInfo("Asia/Seoul"))
+    prompt = f"""
+당신은 홍익대학교 컴퓨터공학과 공지사항 안내 챗봇입니다.
+사용자의 인사나 감사에는 자연스럽고 짧게 답하세요.
+공지와 무관한 지식이나 작업을 요청하면 공지 검색을 도와줄 수 있다고 안내하세요.
+현재 시각은 {current_datetime.isoformat()}, 시간대는 Asia/Seoul입니다.
+
+[사용자 질문]
+{question}
+""".strip()
+
+    try:
+        response = get_client().models.generate_content(
+            model=LLM_MODEL_NAME,
+            contents=prompt,
+        )
+    except Exception as error:
+        return f"답변 생성 중 오류가 발생했습니다: {error}"
+
+    if not response.text:
+        return "안녕하세요. 찾고 싶은 공지 내용을 말씀해주세요."
+
+    return response.text.strip()
 
 
 def generate_answer(

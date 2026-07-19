@@ -5,7 +5,12 @@ import numpy as np
 from rag.src.conversation import ConversationState
 from rag.src.intent import QueryIntent, classify_intent
 from rag.src.preprocess import QueryPreprocessor
-from rag.src.search import create_result_selection_answer, search_notices
+from rag.src.search import (
+    create_query_preprocessor,
+    create_result_selection_answer,
+    hydrate_result_notice,
+    search_notices,
+)
 
 
 class FakeModel:
@@ -15,7 +20,10 @@ class FakeModel:
 
 class QueryPreprocessorTests(unittest.TestCase):
     def setUp(self):
-        self.preprocessor = QueryPreprocessor()
+        self.preprocessor = QueryPreprocessor({
+            "배알골": "배OO 교수가 담당하는 알고리즘 과목",
+            "알골": "알고리즘 과목",
+        })
 
     def test_normalizes_attached_notice_question(self):
         processed = self.preprocessor.process("인턴공지알려줘")
@@ -26,8 +34,33 @@ class QueryPreprocessorTests(unittest.TestCase):
     def test_expands_course_alias(self):
         normalized = self.preprocessor.normalize("배알골 기말 어디서봄?")
 
-        self.assertIn("배OO 교수님 알고리즘", normalized)
+        self.assertIn("배OO 교수가 담당하는 알고리즘 과목", normalized)
         self.assertIn("어디서 봄", normalized)
+
+    def test_reports_resolved_alias_to_caller(self):
+        processed = self.preprocessor.process("배알골 기말 어디서봄?")
+
+        self.assertEqual(len(processed.resolved_aliases), 1)
+        self.assertEqual(processed.resolved_aliases[0].alias, "배알골")
+        self.assertIn("알고리즘", processed.resolved_aliases[0].meaning)
+
+    def test_prefers_longer_alias_before_overlapping_alias(self):
+        processed = self.preprocessor.process("배알골 시험")
+
+        self.assertEqual(
+            [match.alias for match in processed.resolved_aliases],
+            ["배알골"],
+        )
+
+    def test_builds_preprocessor_from_alias_rows(self):
+        preprocessor = create_query_preprocessor([
+            {"id": 1, "alias": "과사", "meaning": "컴퓨터공학과 학과사무실"},
+        ])
+
+        self.assertEqual(
+            preprocessor.normalize("과사 어디야?"),
+            "컴퓨터공학과 학과사무실 어디야?",
+        )
 
 
 class IntentTests(unittest.TestCase):
@@ -189,6 +222,28 @@ class SearchTests(unittest.TestCase):
         )
 
         self.assertEqual([result["notice"]["id"] for result in results], [2])
+
+    def test_hydrates_partial_chunk_result_with_full_notice(self):
+        partial_result = {
+            "hybrid_score": 0.9,
+            "notice": {"id": 10, "title": "시험 일정", "content": "일부 청크"},
+        }
+
+        class FakeNoticeRepository:
+            def fetch_notice(self, notice_id):
+                self.notice_id = notice_id
+                return {
+                    "id": notice_id,
+                    "title": "시험 일정",
+                    "content": "전체 시험 일정표",
+                }
+
+        repository = FakeNoticeRepository()
+        hydrated = hydrate_result_notice(partial_result, repository)
+
+        self.assertEqual(repository.notice_id, 10)
+        self.assertEqual(hydrated["notice"]["content"], "전체 시험 일정표")
+        self.assertEqual(hydrated["hybrid_score"], 0.9)
 
 
 if __name__ == "__main__":

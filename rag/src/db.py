@@ -23,6 +23,12 @@ SUPABASE_NOTICE_COLUMNS = (
     "published_at",
 )
 
+SUPABASE_ALIAS_COLUMNS = (
+    "id",
+    "alias",
+    "meaning",
+)
+
 
 class NoticeRepositoryError(RuntimeError):
     """공지 저장소를 읽지 못했을 때 발생하는 오류입니다."""
@@ -32,10 +38,20 @@ class ChunkRepositoryError(RuntimeError):
     """청크 검색 RPC를 호출하지 못했을 때 발생하는 오류입니다."""
 
 
+class AliasRepositoryError(RuntimeError):
+    """은어 저장소를 읽지 못했을 때 발생하는 오류입니다."""
+
+
 class NoticeRepository(Protocol):
     source_name: str
 
     def fetch_notices(self) -> list[dict]: ...
+
+    def fetch_notice(self, notice_id: object) -> dict | None: ...
+
+
+class AliasRepository(Protocol):
+    def fetch_aliases(self) -> list[dict]: ...
 
 
 class ChunkRepository(Protocol):
@@ -86,6 +102,52 @@ def validate_notices(notices: object) -> list[dict]:
     return notices
 
 
+def validate_aliases(aliases: object) -> list[dict]:
+    if not isinstance(aliases, list):
+        raise AliasRepositoryError("은어 데이터는 배열 형태여야 합니다.")
+
+    required_fields = {"id", "alias", "meaning"}
+    seen_aliases = set()
+
+    for index, alias_row in enumerate(aliases):
+        if not isinstance(alias_row, dict):
+            raise AliasRepositoryError(
+                f"은어 {index}번 데이터가 객체 형태가 아닙니다."
+            )
+
+        missing_fields = required_fields - alias_row.keys()
+        if missing_fields:
+            missing = ", ".join(sorted(missing_fields))
+            raise AliasRepositoryError(
+                f"은어 {index}번 데이터에 필수 컬럼이 없습니다: {missing}"
+            )
+
+        alias = alias_row["alias"]
+        meaning = alias_row["meaning"]
+
+        if not isinstance(alias, str) or not alias.strip():
+            raise AliasRepositoryError(
+                f"은어 {index}번의 alias가 비어 있습니다."
+            )
+
+        if alias != alias.strip():
+            raise AliasRepositoryError(
+                f"은어 {index}번의 alias 앞뒤에 공백이 있습니다."
+            )
+
+        if not isinstance(meaning, str) or not meaning.strip():
+            raise AliasRepositoryError(
+                f"은어 {index}번의 meaning이 비어 있습니다."
+            )
+
+        if alias in seen_aliases:
+            raise AliasRepositoryError(f"중복된 은어가 있습니다: {alias}")
+
+        seen_aliases.add(alias)
+
+    return aliases
+
+
 class JsonNoticeRepository:
     source_name = "sample JSON"
 
@@ -107,6 +169,13 @@ class JsonNoticeRepository:
             ) from error
 
         return validate_notices(notices)
+
+    def fetch_notice(self, notice_id: object) -> dict | None:
+        for notice in self.fetch_notices():
+            if notice.get("id") == notice_id:
+                return notice
+
+        return None
 
 
 class SupabaseNoticeRepository:
@@ -166,6 +235,65 @@ class SupabaseNoticeRepository:
             offset += self.page_size
 
         return validate_notices(notices)
+
+    def fetch_notice(self, notice_id: object) -> dict | None:
+        try:
+            response = self.session.get(
+                f"{self.url}/rest/v1/notices",
+                headers={"apikey": self.key},
+                params={
+                    "select": ",".join(SUPABASE_NOTICE_COLUMNS),
+                    "id": f"eq.{notice_id}",
+                    "limit": 1,
+                },
+                timeout=20,
+            )
+            response.raise_for_status()
+            rows = response.json()
+        except (requests.RequestException, ValueError) as error:
+            raise NoticeRepositoryError(
+                f"Supabase 공지 상세 조회에 실패했습니다: {error}"
+            ) from error
+
+        notices = validate_notices(rows)
+        return notices[0] if notices else None
+
+
+class SupabaseAliasRepository:
+    def __init__(
+        self,
+        url: str,
+        key: str,
+        session: requests.Session | None = None,
+    ) -> None:
+        if not url or not key:
+            raise AliasRepositoryError(
+                "SUPABASE_URL 또는 SUPABASE_KEY가 없습니다."
+            )
+
+        self.url = url.rstrip("/")
+        self.key = key
+        self.session = session or requests.Session()
+
+    def fetch_aliases(self) -> list[dict]:
+        try:
+            response = self.session.get(
+                f"{self.url}/rest/v1/aliases",
+                headers={"apikey": self.key},
+                params={
+                    "select": ",".join(SUPABASE_ALIAS_COLUMNS),
+                    "order": "id.asc",
+                },
+                timeout=20,
+            )
+            response.raise_for_status()
+            rows = response.json()
+        except (requests.RequestException, ValueError) as error:
+            raise AliasRepositoryError(
+                f"Supabase aliases 조회에 실패했습니다: {error}"
+            ) from error
+
+        return validate_aliases(rows)
 
 
 SEMANTIC_CHUNK_FIELDS = {
@@ -329,6 +457,15 @@ def get_chunk_repository() -> ChunkRepository:
     load_dotenv(ROOT_DIR / ".env")
 
     return SupabaseChunkRepository(
+        url=os.getenv("SUPABASE_URL", ""),
+        key=os.getenv("SUPABASE_KEY", ""),
+    )
+
+
+def get_alias_repository() -> AliasRepository:
+    load_dotenv(ROOT_DIR / ".env")
+
+    return SupabaseAliasRepository(
         url=os.getenv("SUPABASE_URL", ""),
         key=os.getenv("SUPABASE_KEY", ""),
     )
