@@ -175,6 +175,7 @@ def search_notice_chunks(
             search_keywords=keywords,
             match_count=match_count,
             category_filter=category_filter,
+            deadline_from=deadline_from,
             exclude_notice_ids=exclude_notice_ids,
         )
 

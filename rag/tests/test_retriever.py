@@ -55,6 +55,7 @@ class ChunkRetrieverTests(unittest.TestCase):
             question="장학금 신청 서류 알려줘",
             repository=repository,
             top_k=2,
+            deadline_from="2026-07-01T00:00:00+09:00",
             exclude_notice_ids=[30],
         )
 
@@ -71,6 +72,14 @@ class ChunkRetrieverTests(unittest.TestCase):
         )
         self.assertEqual(repository.semantic_calls[0]["match_count"], 8)
         self.assertEqual(repository.keyword_calls[0]["match_count"], 8)
+        self.assertEqual(
+            repository.semantic_calls[0]["deadline_from"],
+            "2026-07-01T00:00:00+09:00",
+        )
+        self.assertEqual(
+            repository.keyword_calls[0]["deadline_from"],
+            "2026-07-01T00:00:00+09:00",
+        )
 
 
 if __name__ == "__main__":

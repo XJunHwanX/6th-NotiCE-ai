@@ -178,6 +178,7 @@ class SupabaseChunkRepositoryTests(unittest.TestCase):
             "title": "장학금 신청 안내",
             "category": "장학/근로",
             "published_at": "2026-05-22",
+            "deadline": None,
             "url": "https://example.com/10",
         }
         self.keyword_row = {
@@ -220,6 +221,7 @@ class SupabaseChunkRepositoryTests(unittest.TestCase):
         rows = self.repository.search_notice_chunks_keyword(
             search_keywords=["장학금", "신청"],
             match_count=20,
+            deadline_from="2026-07-01T00:00:00+09:00",
             exclude_notice_ids=(3,),
         )
 
@@ -229,6 +231,10 @@ class SupabaseChunkRepositoryTests(unittest.TestCase):
             request["url"].endswith("/rpc/search_notice_chunks_keyword")
         )
         self.assertEqual(request["json"]["search_keywords"], ["장학금", "신청"])
+        self.assertEqual(
+            request["json"]["deadline_from"],
+            "2026-07-01T00:00:00+09:00",
+        )
         self.assertEqual(request["json"]["exclude_notice_ids"], [3])
 
     def test_search_source_accepts_explicit_modes(self):

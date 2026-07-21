@@ -36,6 +36,10 @@ URGENT_DEADLINE_PATTERNS = (
     "급한",
     "얼마 안 남",
     "마감 가까",
+    "신청 가능",
+    "모집 중",
+    "접수 중",
+    "마감 안 지난",
 )
 
 FOLLOW_UP_TOPICS = {

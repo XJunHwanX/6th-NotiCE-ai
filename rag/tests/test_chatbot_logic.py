@@ -8,9 +8,12 @@ from rag.src.preprocess import QueryPreprocessor
 from rag.src.search import (
     create_query_preprocessor,
     create_result_selection_answer,
+    get_relevant_notices,
     hydrate_result_notice,
+    is_recent_sort_request,
     search_notices,
     should_answer_without_selection,
+    sort_notices_by_published_at,
 )
 from rag.src.router import QueryRoute
 
@@ -71,6 +74,7 @@ class IntentTests(unittest.TestCase):
             "다른 건 없어?": QueryIntent.MORE_RESULTS,
             "신청기간 널널한 거 없어?": QueryIntent.DEADLINE_RELAXED,
             "곧 마감인 공지 있어?": QueryIntent.DEADLINE_URGENT,
+            "지금 신청 가능한 장학금 있어?": QueryIntent.DEADLINE_URGENT,
             "배알골 기말 어디서 봄?": QueryIntent.EXAM_LOCATION,
             "이 공지 요약해줘": QueryIntent.NOTICE_SUMMARY,
         }
@@ -192,6 +196,86 @@ class ConversationStateTests(unittest.TestCase):
 
 
 class SearchTests(unittest.TestCase):
+    def test_rejects_specific_query_with_low_keyword_coverage(self):
+        results = [{
+            "hybrid_score": 0.77,
+            "keyword_score": 0.4,
+            "matched_keywords": ["컴퓨터", "공학"],
+            "notice": {"id": 1, "published_at": "2026-03-02"},
+        }]
+
+        relevant = get_relevant_notices(
+            results,
+            required_keywords=[
+                "2027",
+                "컴퓨터",
+                "공학",
+                "해외여행",
+                "지원금",
+            ],
+        )
+
+        self.assertEqual(relevant, [])
+
+    def test_accepts_specific_query_with_enough_keyword_coverage(self):
+        results = [{
+            "hybrid_score": 0.85,
+            "keyword_score": 0.8,
+            "matched_keywords": ["신청", "장학금"],
+            "notice": {"id": 1, "published_at": "2026-05-22"},
+        }]
+
+        relevant = get_relevant_notices(
+            results,
+            required_keywords=["신청", "가능", "장학금"],
+        )
+
+        self.assertEqual([result["notice"]["id"] for result in relevant], [1])
+
+    def test_relevant_notices_are_returned_newest_first(self):
+        results = [
+            {
+                "hybrid_score": 0.91,
+                "keyword_score": 1.0,
+                "notice": {"id": 1, "published_at": "2024-03-01"},
+            },
+            {
+                "hybrid_score": 0.89,
+                "keyword_score": 1.0,
+                "notice": {"id": 2, "published_at": "2026-07-01"},
+            },
+            {
+                "hybrid_score": 0.88,
+                "keyword_score": 1.0,
+                "notice": {"id": 3, "published_at": None},
+            },
+        ]
+
+        relevant = get_relevant_notices(results)
+
+        self.assertEqual(
+            [result["notice"]["id"] for result in relevant],
+            [2, 1, 3],
+        )
+
+    def test_recognizes_recent_sort_follow_up(self):
+        self.assertTrue(is_recent_sort_request("최신순으로 알려줄래?"))
+        self.assertTrue(is_recent_sort_request("작성일 순으로 다시 보여줘"))
+        self.assertFalse(is_recent_sort_request("신청 방법 알려줘"))
+
+    def test_recent_sort_keeps_undated_notices_last(self):
+        results = [
+            {"notice": {"id": 1, "published_at": None}},
+            {"notice": {"id": 2, "published_at": "2025-01-01"}},
+        ]
+
+        sorted_results = sort_notices_by_published_at(results)
+
+        self.assertEqual(
+            [result["notice"]["id"] for result in sorted_results],
+            [2, 1],
+        )
+
     def test_result_selection_answer_only_lists_titles(self):
         results = [
             {

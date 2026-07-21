@@ -75,6 +75,21 @@ MIN_KEYWORD_SCORE = 0.6
 # 1위 결과와 점수 차이가 이 값보다 큰 공지는 제외
 MAX_SCORE_GAP = 0.07
 
+# 구체적인 질문은 전체 핵심어 중 절반 이상이 실제 공지에 등장해야 함
+MIN_SPECIFIC_QUERY_KEYWORDS = 3
+MIN_KEYWORD_COVERAGE = 0.5
+
+RECENT_SORT_PATTERNS = (
+    "최신순",
+    "최신 순",
+    "최근순",
+    "최근 순",
+    "날짜순",
+    "날짜 순",
+    "작성일순",
+    "작성일 순",
+)
+
 # =========================================================
 # 데이터 불러오기
 # =========================================================
@@ -256,6 +271,7 @@ def get_relevant_notices(
     min_top_score: float = MIN_TOP_SCORE,
     min_keyword_score: float = MIN_KEYWORD_SCORE,
     max_score_gap: float = MAX_SCORE_GAP,
+    required_keywords: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict]:
     """
     검색 결과 중 질문과 관련성이 충분한 공지들을 반환합니다.
@@ -275,6 +291,11 @@ def get_relevant_notices(
         return []
 
     relevant_results = []
+    unique_required_keywords = {
+        normalize_text(keyword)
+        for keyword in (required_keywords or ())
+        if normalize_text(keyword)
+    }
 
     for result in results:
         score = result["hybrid_score"]
@@ -284,9 +305,39 @@ def get_relevant_notices(
             score_gap <= max_score_gap
             or result["keyword_score"] >= min_keyword_score
         ):
+            if len(unique_required_keywords) >= MIN_SPECIFIC_QUERY_KEYWORDS:
+                matched_keywords = {
+                    normalize_text(keyword)
+                    for keyword in result.get("matched_keywords", [])
+                }
+                keyword_coverage = (
+                    len(unique_required_keywords & matched_keywords)
+                    / len(unique_required_keywords)
+                )
+
+                if keyword_coverage < MIN_KEYWORD_COVERAGE:
+                    continue
+
             relevant_results.append(result)
 
-    return relevant_results
+    return sort_notices_by_published_at(relevant_results)
+
+
+def sort_notices_by_published_at(results: list[dict]) -> list[dict]:
+    """관련도 순서를 날짜가 같은 공지의 보조 기준으로 유지하며 최신순 정렬합니다."""
+    return sorted(
+        results,
+        key=lambda result: str(
+            result.get("notice", {}).get("published_at") or ""
+        ),
+        reverse=True,
+    )
+
+
+def is_recent_sort_request(question: str) -> bool:
+    """현재 검색 결과를 최신순으로 다시 보여달라는 요청인지 확인합니다."""
+    normalized = " ".join(question.lower().split())
+    return any(pattern in normalized for pattern in RECENT_SORT_PATTERNS)
 
 
 def create_result_selection_answer(results: list[dict]) -> str:
@@ -459,6 +510,19 @@ def main() -> None:
             print(answer)
             continue
 
+        if (
+            conversation.has_candidates
+            and conversation.active_result is None
+            and is_recent_sort_request(question)
+        ):
+            sorted_results = sort_notices_by_published_at(
+                conversation.candidate_results
+            )
+            conversation.candidate_results = sorted_results
+            print("\n===== 챗봇 답변 =====")
+            print(create_result_selection_answer(sorted_results))
+            continue
+
         processed_query = preprocessor.process(question)
         answer_question = processed_query.normalized
 
@@ -601,6 +665,9 @@ def main() -> None:
 
         relevant_results = get_relevant_notices(
             results=search_results,
+            required_keywords=preprocessor.extract_keywords(
+                resolution.search_question
+            ),
         )
 
         if not relevant_results:

@@ -3,6 +3,13 @@ begin;
 create schema if not exists extensions;
 create extension if not exists pg_trgm with schema extensions;
 
+alter table public.notices
+  add column if not exists deadline timestamptz;
+
+create index if not exists notices_deadline_idx
+  on public.notices (deadline)
+  where deadline is not null;
+
 do $$
 begin
   if exists (
@@ -123,14 +130,18 @@ as $$
     (1 - (c.embedding OPERATOR(public.<=>) query_embedding))::double precision
       as semantic_score,
     n.title,
-    n.category,
+    array_to_string(n.category, ', ') as category,
     n.published_at,
-    null::timestamptz as deadline,
+    n.deadline,
     n.url
   from public.notice_chunks as c
   join public.notices as n on n.id = c.notice_id
   where query_embedding is not null
-    and (category_filter is null or n.category = category_filter)
+    and (
+      category_filter is null
+      or category_filter = any(coalesce(n.category, '{}'::text[]))
+    )
+    and (deadline_from is null or n.deadline >= deadline_from)
     and not (
       c.notice_id = any(
         coalesce(exclude_notice_ids, '{}'::bigint[])
@@ -147,12 +158,20 @@ comment on function public.match_notice_chunks(
   timestamptz,
   bigint[]
 ) is
-  'Cosine similarity search for notice chunks. deadline_from is reserved until notices.deadline is added.';
+  'Cosine similarity search for notice chunks with optional category and deadline filters.';
+
+drop function if exists public.search_notice_chunks_keyword(
+  text[],
+  integer,
+  text,
+  bigint[]
+);
 
 create or replace function public.search_notice_chunks_keyword(
   search_keywords text[],
   match_count integer default 20,
   category_filter text default null,
+  deadline_from timestamptz default null,
   exclude_notice_ids bigint[] default '{}'::bigint[]
 )
 returns table (
@@ -185,8 +204,9 @@ as $$
       c.chunk_index,
       c.content_text,
       n.title,
-      n.category,
+      array_to_string(n.category, ', ') as category,
       n.published_at,
+      n.deadline,
       n.url,
       k.keyword,
       least(
@@ -195,7 +215,10 @@ as $$
           then 1.0 else 0.0
         end
         + case
-          when strpos(lower(coalesce(n.category, '')), k.keyword) > 0
+          when strpos(
+            lower(array_to_string(coalesce(n.category, '{}'::text[]), ' ')),
+            k.keyword
+          ) > 0
           then 0.8 else 0.0
         end
         + case
@@ -211,7 +234,11 @@ as $$
     from public.notice_chunks as c
     join public.notices as n on n.id = c.notice_id
     cross join keywords as k
-    where (category_filter is null or n.category = category_filter)
+    where (
+        category_filter is null
+        or category_filter = any(coalesce(n.category, '{}'::text[]))
+      )
+      and (deadline_from is null or n.deadline >= deadline_from)
       and not (
         c.notice_id = any(
           coalesce(exclude_notice_ids, '{}'::bigint[])
@@ -232,6 +259,7 @@ as $$
       s.title,
       s.category,
       s.published_at,
+      s.deadline,
       s.url
     from scored as s
     where s.keyword_match_score > 0
@@ -243,6 +271,7 @@ as $$
       s.title,
       s.category,
       s.published_at,
+      s.deadline,
       s.url
   )
   select
@@ -255,7 +284,7 @@ as $$
     m.title,
     m.category,
     m.published_at,
-    null::timestamptz as deadline,
+    m.deadline,
     m.url
   from matched as m
   order by m.keyword_score desc, m.published_at desc nulls last
@@ -274,6 +303,7 @@ revoke all on function public.search_notice_chunks_keyword(
   text[],
   integer,
   text,
+  timestamptz,
   bigint[]
 ) from public;
 
@@ -289,7 +319,10 @@ grant execute on function public.search_notice_chunks_keyword(
   text[],
   integer,
   text,
+  timestamptz,
   bigint[]
 ) to anon, authenticated, service_role;
+
+notify pgrst, 'reload schema';
 
 commit;

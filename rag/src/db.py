@@ -21,6 +21,7 @@ SUPABASE_NOTICE_COLUMNS = (
     "category",
     "content",
     "published_at",
+    "deadline",
 )
 
 SUPABASE_ALIAS_COLUMNS = (
@@ -69,6 +70,7 @@ class ChunkRepository(Protocol):
         search_keywords: list[str],
         match_count: int,
         category_filter: str | None = None,
+        deadline_from: str | None = None,
         exclude_notice_ids: tuple | list | set | None = None,
     ) -> list[dict]: ...
 
@@ -305,6 +307,7 @@ SEMANTIC_CHUNK_FIELDS = {
     "title",
     "category",
     "published_at",
+    "deadline",
     "url",
 }
 
@@ -318,6 +321,7 @@ KEYWORD_CHUNK_FIELDS = {
     "title",
     "category",
     "published_at",
+    "deadline",
     "url",
 }
 
@@ -415,6 +419,7 @@ class SupabaseChunkRepository:
         search_keywords: list[str],
         match_count: int,
         category_filter: str | None = None,
+        deadline_from: str | None = None,
         exclude_notice_ids: tuple | list | set | None = None,
     ) -> list[dict]:
         return self._call_rpc(
@@ -423,6 +428,7 @@ class SupabaseChunkRepository:
                 "search_keywords": search_keywords,
                 "match_count": match_count,
                 "category_filter": category_filter,
+                "deadline_from": deadline_from,
                 "exclude_notice_ids": list(exclude_notice_ids or ()),
             },
             required_fields=KEYWORD_CHUNK_FIELDS,
