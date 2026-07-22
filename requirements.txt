@@ -1,0 +1,10 @@
+requests
+beautifulsoup4
+pandas
+lxml
+html5lib
+gdown
+pywebpush
+py-vapid
+torch
+transformers
