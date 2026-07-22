@@ -75,12 +75,23 @@ def classify_intent(question: str, has_context: bool = False) -> QueryIntent:
         word in normalized
         for word in ("시험", "중간", "기말")
     )
-    has_location_word = any(
+    has_exam_detail_word = any(
         word in normalized
-        for word in ("장소", "강의실", "교실", "어디")
+        for word in (
+            "장소",
+            "강의실",
+            "교실",
+            "어디",
+            "언제",
+            "날짜",
+            "시간",
+            "일시",
+            "몇 시",
+            "몇시",
+        )
     )
 
-    if has_exam_word and has_location_word:
+    if has_exam_word and has_exam_detail_word:
         return QueryIntent.EXAM_LOCATION
 
     if any(pattern in normalized for pattern in RELAXED_DEADLINE_PATTERNS):

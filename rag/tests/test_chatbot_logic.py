@@ -57,6 +57,47 @@ class QueryPreprocessorTests(unittest.TestCase):
             ["배알골"],
         )
 
+    def test_does_not_expand_aliases_inside_resolved_meaning(self):
+        preprocessor = QueryPreprocessor({
+            "혜자구": "자료구조및프로그래밍 자료구조 이혜영",
+            "혜영": "이혜영",
+        })
+
+        processed = preprocessor.process("혜자구 시험언제냐")
+
+        self.assertEqual(
+            processed.normalized,
+            "자료구조및프로그래밍 자료구조 이혜영 시험언제냐",
+        )
+        self.assertEqual(
+            [match.alias for match in processed.resolved_aliases],
+            ["혜자구"],
+        )
+
+    def test_does_not_expand_alias_inside_longer_korean_word(self):
+        preprocessor = QueryPreprocessor({"디어": "박재영"})
+
+        processed = preprocessor.process("멀티미디어실 어디야?")
+
+        self.assertEqual(processed.normalized, "멀티미디어실 어디야?")
+        self.assertEqual(processed.resolved_aliases, ())
+
+    def test_expands_alias_at_start_of_attached_question(self):
+        preprocessor = QueryPreprocessor({
+            "혜자구": "자료구조및프로그래밍 자료구조 이혜영",
+        })
+
+        processed = preprocessor.process("혜자구시험언제냐")
+
+        self.assertEqual(
+            processed.normalized,
+            "자료구조및프로그래밍 자료구조 이혜영시험언제냐",
+        )
+        self.assertEqual(
+            [match.alias for match in processed.resolved_aliases],
+            ["혜자구"],
+        )
+
     def test_builds_preprocessor_from_alias_rows(self):
         preprocessor = create_query_preprocessor([
             {"id": 1, "alias": "과사", "meaning": "컴퓨터공학과 학과사무실"},
@@ -76,6 +117,7 @@ class IntentTests(unittest.TestCase):
             "곧 마감인 공지 있어?": QueryIntent.DEADLINE_URGENT,
             "지금 신청 가능한 장학금 있어?": QueryIntent.DEADLINE_URGENT,
             "배알골 기말 어디서 봄?": QueryIntent.EXAM_LOCATION,
+            "자료구조및프로그래밍 시험언제냐": QueryIntent.EXAM_LOCATION,
             "이 공지 요약해줘": QueryIntent.NOTICE_SUMMARY,
         }
 

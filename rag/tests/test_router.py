@@ -84,6 +84,21 @@ class QueryRouterTests(unittest.TestCase):
         self.assertEqual(plan.route, QueryRoute.EXAM_NOTICE_SEARCH)
         self.assertEqual(plan.source, "fallback")
 
+    def test_exam_time_rule_overrides_wrong_llm_route(self):
+        question = "자료구조및프로그래밍 자료구조 이혜영 시험언제냐"
+        client = FakeClient(FakeResponse(parsed={
+            "route": "notice_search",
+            "search_query": "자료구조 공지",
+            "confidence": 0.8,
+            "clarification": None,
+        }))
+
+        plan = plan_question(question=question, client=client)
+
+        self.assertEqual(plan.route, QueryRoute.EXAM_NOTICE_SEARCH)
+        self.assertEqual(plan.search_query, question)
+        self.assertEqual(plan.source, "rule")
+
     def test_fallback_detects_open_notice_search(self):
         plan = create_fallback_plan("곧 마감인 공지 있어?")
 

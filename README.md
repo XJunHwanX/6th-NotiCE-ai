@@ -157,6 +157,16 @@ rag/.venv/bin/pip install -r rag/requirements.txt
 rag/.venv/bin/python -m rag.src.search
 ```
 
+은어 DB 연결 확인:
+
+```bash
+rag/.venv/bin/python -m rag.src.check_alias_db
+```
+
+대시보드에는 `aliases` 데이터가 있는데 위 명령에서 0개로 보이면,
+`supabase/aliases.sql`의 SELECT 정책을 Supabase SQL editor에 적용했는지와
+`.env`의 `SUPABASE_URL`이 같은 프로젝트인지 확인합니다.
+
 Supabase 설정이 없거나 `NOTICE_SOURCE=json`이면
 `rag/data/sample_notices.json`을 사용합니다. 첫 실행에는
 `intfloat/multilingual-e5-small` 모델 다운로드가 필요합니다.

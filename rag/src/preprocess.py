@@ -127,6 +127,16 @@ class QueryPreprocessor:
 
     def __init__(self, aliases: Mapping[str, str] | None = None) -> None:
         self.aliases = dict(aliases or {})
+        sorted_aliases = sorted(self.aliases, key=len, reverse=True)
+        self._alias_pattern = (
+            re.compile(
+                r"(?<![0-9A-Za-z가-힣])(?:"
+                + "|".join(re.escape(alias) for alias in sorted_aliases)
+                + r")"
+            )
+            if sorted_aliases
+            else None
+        )
 
     def resolve_aliases(
         self,
@@ -134,19 +144,22 @@ class QueryPreprocessor:
     ) -> tuple[str, tuple[ResolvedAlias, ...]]:
         normalized = " ".join(question.strip().split())
         resolved_aliases = []
+        seen_aliases = set()
 
-        for alias, meaning in sorted(
-            self.aliases.items(),
-            key=lambda item: len(item[0]),
-            reverse=True,
-        ):
-            if alias not in normalized:
-                continue
+        def replace_alias(match: re.Match[str]) -> str:
+            alias = match.group(0)
+            meaning = self.aliases[alias]
 
-            normalized = normalized.replace(alias, meaning)
-            resolved_aliases.append(
-                ResolvedAlias(alias=alias, meaning=meaning)
-            )
+            if alias not in seen_aliases:
+                resolved_aliases.append(
+                    ResolvedAlias(alias=alias, meaning=meaning)
+                )
+                seen_aliases.add(alias)
+
+            return meaning
+
+        if self._alias_pattern is not None:
+            normalized = self._alias_pattern.sub(replace_alias, normalized)
 
         for before, after in sorted(
             SPACING_REPLACEMENTS.items(),

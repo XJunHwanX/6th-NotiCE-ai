@@ -150,6 +150,7 @@ def plan_question(
     client: Any | None = None,
     now: datetime | None = None,
 ) -> QueryPlan:
+    rule_intent = classify_intent(question, has_context=has_context)
     prompt = create_router_prompt(
         question=question,
         has_context=has_context,
@@ -178,6 +179,17 @@ def plan_question(
     clarification = parsed.clarification
     if parsed.route == QueryRoute.CLARIFICATION and not clarification:
         clarification = "어떤 종류의 공지를 찾는지 조금 더 알려주세요."
+
+    if (
+        rule_intent == QueryIntent.EXAM_LOCATION
+        and parsed.route != QueryRoute.EXAM_NOTICE_SEARCH
+    ):
+        return QueryPlan(
+            route=QueryRoute.EXAM_NOTICE_SEARCH,
+            search_query=question.strip(),
+            confidence=1.0,
+            source="rule",
+        )
 
     return QueryPlan(
         route=parsed.route,
