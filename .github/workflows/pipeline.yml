@@ -2,7 +2,7 @@ name: Notice Pipeline
 
 on:
   schedule:
-    - cron: '0 * * * *'   # Runs every hour
+    - cron: '0 */6 * * *'   # Runs every hour
   workflow_dispatch:        # Enables manual run button in Actions tab
 
 jobs:
