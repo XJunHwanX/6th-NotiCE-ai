@@ -5,24 +5,27 @@
 학생들에게 필요한 공지를 웹 푸시로 알려주는 서비스입니다.
 
 ## 프로젝트 구조
+
+```
 6th-NotiCE-ai/
-├── crawler/ # 공지 크롤링 스크립트
-│ ├── crawl_cse.py # 컴공과 게시판 크롤링
-│ ├── crawl_hongik.py # 홍익대 전체 게시판 크롤링
-│ ├── crawl_hongik_general.py
-│ ├── crawl_content.py # 본문 크롤링
-│ ├── crawl_job_board_titles.py
-│ ├── merge_labels.py # 라벨 병합
-│ └── upload_supabase.py # Supabase 업로드
-├── data/ # 크롤링/전처리 데이터
-│ └── preprocess.py # 중복 제거, 결측치 확인
+├── crawler/                  # 공지 크롤링 스크립트
+│   ├── crawl_cse.py              # 컴공과 게시판 크롤링
+│   ├── crawl_hongik.py           # 홍익대 전체 게시판 크롤링
+│   ├── crawl_hongik_general.py
+│   ├── crawl_content.py          # 본문 크롤링
+│   ├── crawl_job_board_titles.py
+│   ├── merge_labels.py           # 라벨 병합
+│   └── upload_supabase.py        # Supabase 업로드
+├── data/                      # 크롤링/전처리 데이터
+│   └── preprocess.py             # 중복 제거, 결측치 확인
 ├── backend/
-│ └── notice_classifier.py # 분류 모델 로드 및 예측 함수
+│   └── notice_classifier.py      # 분류 모델 로드 및 예측 함수
 ├── pipeline/
-│ ├── pipeline.py # 크롤링 → 분류 → DB저장 파이프라인
-│ ├── model_final_v5/ # 최종 학습된 분류 모델 (git 미포함, 아래 참고)
-│ └── .env # Supabase 등 환경변수 (git 미포함)
-└── model/ # 모델 백업용 폴더
+│   ├── pipeline.py               # 크롤링 → 분류 → DB저장 파이프라인
+│   ├── model_final_v5/           # 최종 학습된 분류 모델 (git 미포함, 아래 참고)
+│   └── .env                      # Supabase 등 환경변수 (git 미포함)
+└── model/                     # 모델 백업용 폴더
+```
 
 ## ⚠️ 모델 파일 다운로드 (필수)
 
