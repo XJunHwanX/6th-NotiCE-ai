@@ -1,0 +1,50 @@
+name: Notice Pipeline
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # 매시간 정각 실행 (필요에 맞게 조정)
+  workflow_dispatch:        # Actions 탭에서 수동 실행 버튼 활성화
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: pip 캐시 설정
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 모델 캐시 확인
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: pipeline/model_final_v5
+          key: model-final-v5-cache
+
+      - name: 모델 다운로드 (캐시 없을 때만 실행)
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: |
+          pip install gdown
+          gdown --folder "https://drive.google.com/drive/folders/1cj32IOJXgLEPJz7RZRkU6_H5g5FNsPQ-" --output pipeline/model_final_v5
+
+      - name: .env 파일 생성
+        run: |
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" > pipeline/.env
+          echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> pipeline/.env
+
+      - name: 파이프라인 실행
+        run: python pipeline/pipeline.py
