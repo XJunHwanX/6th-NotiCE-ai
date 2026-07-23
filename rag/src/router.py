@@ -176,6 +176,14 @@ def plan_question(
             has_active_notice=has_active_notice,
         )
 
+    search_query = parsed.search_query.strip()
+    if not search_query:
+        return create_fallback_plan(
+            question=question,
+            has_context=has_context,
+            has_active_notice=has_active_notice,
+        )
+
     clarification = parsed.clarification
     if parsed.route == QueryRoute.CLARIFICATION and not clarification:
         clarification = "어떤 종류의 공지를 찾는지 조금 더 알려주세요."
@@ -193,7 +201,7 @@ def plan_question(
 
     return QueryPlan(
         route=parsed.route,
-        search_query=parsed.search_query.strip(),
+        search_query=search_query,
         confidence=parsed.confidence,
         clarification=clarification,
     )

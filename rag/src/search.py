@@ -4,6 +4,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 if __package__:
+    from .config import EMBEDDING_MODEL_NAME
     from .conversation import ConversationState
     from .db import (
         AliasRepositoryError,
@@ -26,6 +27,7 @@ if __package__:
         route_to_intent,
     )
 else:
+    from config import EMBEDDING_MODEL_NAME
     from conversation import ConversationState
     from db import (
         AliasRepositoryError,
@@ -52,9 +54,6 @@ else:
 # =========================================================
 # 기본 설정
 # =========================================================
-
-# 로컬에서 실행할 다국어 임베딩 모델
-MODEL_NAME = "intfloat/multilingual-e5-small"
 
 # 검색할 최대 공지 개수
 TOP_K = 5
@@ -419,14 +418,27 @@ def print_search_failure(results: list[dict]) -> None:
 # =========================================================
 
 def main() -> None:
-    print("임베딩 모델을 불러오는 중입니다.")
-
-    model = SentenceTransformer(MODEL_NAME)
-    search_source = get_rag_search_source()
     notices = []
     notice_embeddings = None
     chunk_repository = None
-    notice_repository = get_notice_repository()
+
+    try:
+        search_source = get_rag_search_source()
+        notice_repository = get_notice_repository()
+
+        if search_source == "chunks":
+            chunk_repository = get_chunk_repository()
+    except (NoticeRepositoryError, ChunkRepositoryError) as error:
+        print(f"챗봇 실행 설정을 확인해주세요: {error}")
+        return
+
+    print("임베딩 모델을 불러오는 중입니다.")
+
+    try:
+        model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+    except Exception as error:
+        print(f"임베딩 모델을 불러오지 못했습니다: {error}")
+        return
 
     try:
         alias_rows = get_alias_repository().fetch_aliases()
@@ -437,7 +449,6 @@ def main() -> None:
         print(f"은어 사전을 불러오지 못해 기본 검색으로 진행합니다: {error}")
 
     if search_source == "chunks":
-        chunk_repository = get_chunk_repository()
         print("Supabase notice_chunks RPC 검색 모드입니다.")
     else:
         notices = notice_repository.fetch_notices()
@@ -673,6 +684,14 @@ def main() -> None:
         if not relevant_results:
             if resolution.intent == QueryIntent.MORE_RESULTS:
                 print("\n현재 저장된 공지 중 추가 결과가 없습니다.")
+                continue
+
+            if query_route == QueryRoute.OPEN_NOTICE_SEARCH:
+                print(
+                    "\n현재 신청 가능한 공지를 확인하지 못했습니다. "
+                    "크롤링 파이프라인의 notices.deadline 적재 상태를 "
+                    "확인해주세요."
+                )
                 continue
 
             print_search_failure(search_results)

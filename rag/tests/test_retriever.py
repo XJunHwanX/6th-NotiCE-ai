@@ -2,10 +2,19 @@ import unittest
 
 import numpy as np
 
+from rag.src.config import EMBEDDING_DIMENSION
+from rag.src.db import ChunkRepositoryError
 from rag.src.retriever import search_notice_chunks
 
 
 class FakeModel:
+    def encode(self, text, normalize_embeddings=True):
+        embedding = np.zeros(EMBEDDING_DIMENSION, dtype=np.float32)
+        embedding[:3] = [0.1, 0.2, 0.3]
+        return embedding
+
+
+class InvalidDimensionModel:
     def encode(self, text, normalize_embeddings=True):
         return np.asarray([0.1, 0.2, 0.3], dtype=np.float32)
 
@@ -47,6 +56,18 @@ class FakeChunkRepository:
 
 
 class ChunkRetrieverTests(unittest.TestCase):
+    def test_rejects_query_embedding_with_wrong_dimension(self):
+        repository = FakeChunkRepository()
+
+        with self.assertRaisesRegex(ChunkRepositoryError, "임베딩 차원"):
+            search_notice_chunks(
+                model=InvalidDimensionModel(),
+                question="장학금 공지",
+                repository=repository,
+            )
+
+        self.assertEqual(repository.semantic_calls, [])
+
     def test_merges_rpc_scores_and_groups_chunks_by_notice(self):
         repository = FakeChunkRepository()
 

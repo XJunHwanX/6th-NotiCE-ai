@@ -5,15 +5,31 @@ from typing import Protocol
 import numpy as np
 
 if __package__:
-    from .db import ChunkRepository
+    from .config import EMBEDDING_DIMENSION
+    from .db import ChunkRepository, ChunkRepositoryError
     from .preprocess import DEFAULT_PREPROCESSOR, QueryPreprocessor
 else:
-    from db import ChunkRepository
+    from config import EMBEDDING_DIMENSION
+    from db import ChunkRepository, ChunkRepositoryError
     from preprocess import DEFAULT_PREPROCESSOR, QueryPreprocessor
 
 
 class EmbeddingModel(Protocol):
     def encode(self, text: str, normalize_embeddings: bool = True): ...
+
+
+def _validate_query_embedding(query_embedding: np.ndarray) -> None:
+    """크롤러가 생성한 passage 임베딩과 질문 임베딩의 계약을 확인합니다."""
+    if query_embedding.ndim != 1 or query_embedding.size != EMBEDDING_DIMENSION:
+        raise ChunkRepositoryError(
+            "질문 임베딩 차원이 올바르지 않습니다: "
+            f"expected={EMBEDDING_DIMENSION}, actual={query_embedding.shape}"
+        )
+
+    if not np.isfinite(query_embedding).all():
+        raise ChunkRepositoryError(
+            "질문 임베딩에 NaN 또는 Infinity가 포함되어 있습니다."
+        )
 
 
 def _merge_rpc_rows(
@@ -158,6 +174,7 @@ def search_notice_chunks(
         ),
         dtype=np.float32,
     )
+    _validate_query_embedding(query_embedding)
     keywords = preprocessor.extract_keywords(question)
     match_count = max(top_k * 4, top_k)
 

@@ -1,8 +1,8 @@
 begin;
 
-create schema if not exists extensions;
-create extension if not exists pg_trgm with schema extensions;
-
+-- The crawler pipeline owns notice_chunks creation and passage embeddings.
+-- This migration only adds the chatbot's optional deadline field, validates
+-- the shared read contract, and installs read-only search functions.
 alter table public.notices
   add column if not exists deadline timestamptz;
 
@@ -12,73 +12,31 @@ create index if not exists notices_deadline_idx
 
 do $$
 begin
+  if to_regclass('public.notice_chunks') is null then
+    raise exception using message =
+      'public.notice_chunks must be created by the crawler pipeline first';
+  end if;
+
   if exists (
-    select 1
-    from information_schema.columns
-    where table_schema = 'public'
-      and table_name = 'notice_chunks'
-      and column_name = 'content'
-  ) and not exists (
-    select 1
-    from information_schema.columns
-    where table_schema = 'public'
-      and table_name = 'notice_chunks'
-      and column_name = 'content_text'
+    select required.column_name
+    from (
+      values
+        ('id'),
+        ('notice_id'),
+        ('chunk_index'),
+        ('content_text'),
+        ('embedding')
+    ) as required(column_name)
+    where not exists (
+      select 1
+      from information_schema.columns as existing
+      where existing.table_schema = 'public'
+        and existing.table_name = 'notice_chunks'
+        and existing.column_name = required.column_name
+    )
   ) then
-    alter table public.notice_chunks rename column content to content_text;
-  end if;
-end
-$$;
-
-alter table public.notice_chunks
-  add column if not exists chunk_text text,
-  add column if not exists embedding public.vector(384),
-  add column if not exists token_count integer,
-  add column if not exists content_hash text,
-  add column if not exists embedded_at timestamptz default now();
-
-alter table public.notice_chunks
-  alter column content_text set not null,
-  alter column chunk_text set not null,
-  alter column embedding set not null,
-  alter column token_count set not null,
-  alter column content_hash set not null,
-  alter column embedded_at set default now(),
-  alter column embedded_at set not null;
-
-do $$
-begin
-  if not exists (
-    select 1
-    from pg_constraint
-    where conrelid = 'public.notice_chunks'::regclass
-      and conname = 'notice_chunks_chunk_index_nonnegative'
-  ) then
-    alter table public.notice_chunks
-      add constraint notice_chunks_chunk_index_nonnegative
-      check (chunk_index >= 0);
-  end if;
-
-  if not exists (
-    select 1
-    from pg_constraint
-    where conrelid = 'public.notice_chunks'::regclass
-      and conname = 'notice_chunks_token_count_positive'
-  ) then
-    alter table public.notice_chunks
-      add constraint notice_chunks_token_count_positive
-      check (token_count > 0);
-  end if;
-
-  if not exists (
-    select 1
-    from pg_constraint
-    where conrelid = 'public.notice_chunks'::regclass
-      and conname = 'notice_chunks_content_hash_sha256'
-  ) then
-    alter table public.notice_chunks
-      add constraint notice_chunks_content_hash_sha256
-      check (content_hash ~ '^[0-9a-f]{64}$');
+    raise exception using message =
+      'public.notice_chunks does not satisfy the chatbot read contract';
   end if;
 end
 $$;
@@ -86,10 +44,6 @@ $$;
 create index if not exists notice_chunks_embedding_hnsw_idx
   on public.notice_chunks
   using hnsw (embedding public.vector_cosine_ops);
-
-create index if not exists notice_chunks_text_trgm_idx
-  on public.notice_chunks
-  using gin (chunk_text extensions.gin_trgm_ops);
 
 alter table public.notice_chunks enable row level security;
 
