@@ -217,7 +217,11 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-.DS_Store
+.env
 
-# Generated Supabase chunk data
-supabase/generated/
+private_key.pem
+public_key.pem
+# 모델 파일 (용량 문제로 git 제외, 구글드라이브에서 다운로드)
+pipeline/model_final_v5/
+
+.DS_Store

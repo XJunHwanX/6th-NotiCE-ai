@@ -1,0 +1,57 @@
+name: Notice Pipeline
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # Runs every hour
+  workflow_dispatch:        # Enables manual run button in Actions tab
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check model cache
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: pipeline/model_final_v5
+          key: model-final-v5-cache
+
+      - name: Download model (only if cache miss)
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: |
+          pip install gdown
+          gdown --folder "https://drive.google.com/drive/folders/1cj32IOJXgLEPJz7RZRkU6_H5g5FNsPQ-" --output pipeline/model_final_v5
+
+      - name: Create .env file
+        run: |
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" > pipeline/.env
+          echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> pipeline/.env
+          echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY_OCR }}" >> pipeline/.env
+          echo "VAPID_CLAIMS_EMAIL=${{ secrets.VAPID_CLAIMS_EMAIL }}" >> pipeline/.env
+          echo "VAPID_PRIVATE_KEY_PATH=pipeline/private_key.pem" >> pipeline/.env
+          
+      - name: Create VAPID private key file
+        run: |
+          echo "${{ secrets.VAPID_PRIVATE_KEY }}" > pipeline/private_key.pem
+      
+      - name: Run pipeline
+        run: python pipeline/pipeline.py
