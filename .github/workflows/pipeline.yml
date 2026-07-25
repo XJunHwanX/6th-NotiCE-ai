@@ -45,6 +45,7 @@ jobs:
         run: |
           echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" > pipeline/.env
           echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> pipeline/.env
+          echo "SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" >> pipeline/.env
           echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY_OCR }}" >> pipeline/.env
           echo "VAPID_CLAIMS_EMAIL=${{ secrets.VAPID_CLAIMS_EMAIL }}" >> pipeline/.env
           echo "VAPID_PRIVATE_KEY_PATH=pipeline/private_key.pem" >> pipeline/.env

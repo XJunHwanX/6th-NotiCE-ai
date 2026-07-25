@@ -36,7 +36,8 @@ from supabase import create_client
 from pywebpush import webpush, WebPushException
 
 from dotenv import load_dotenv
-
+from sentence_transformers import SentenceTransformer
+from chunk_and_embed import save_notice_chunks, EMBEDDING_MODEL_NAME
 
 # pipeline.py가 있는 폴더 기준으로 .env 찾기
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
@@ -74,6 +75,12 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     raise SystemExit("SUPABASE_URL / SUPABASE_KEY가 설정되지 않았습니다.")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+supabase_service = (
+    create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    if SUPABASE_SERVICE_ROLE_KEY else None
+)
 
 if USE_OCR:
     import google.generativeai as genai
@@ -359,6 +366,9 @@ def main():
     print("3. 분류 모델 로드 중...")
     classifier = load_classifier(MODEL_DIR)
 
+    print("3-1. 임베딩 모델 로드 중...")
+    embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+
     for notice in new_notices:
         print(f"\n[{notice['article_no']}] {notice['title'][:40]}")
 
@@ -368,7 +378,7 @@ def main():
         categories = predict_category(classifier, notice["title"])
         print(f"   분류 결과: {categories}")
 
-        supabase.table("notices").insert({
+        result = supabase.table("notices").insert({
             "source_notice_id": notice["article_no"],
             "title": notice["title"],
             "url": notice["url"],
@@ -377,6 +387,18 @@ def main():
             "content": body_text,
         }).execute()
         print("   DB 저장 완료")
+
+        inserted_notice = result.data[0] if result.data else None
+
+        if inserted_notice and supabase_service:
+            try:
+                print("   청크 생성 및 임베딩 중...")
+                save_notice_chunks(inserted_notice, embedding_model, supabase_service)
+                print("   청크 저장 완료")
+            except Exception as e:
+                print(f"   [경고] 청크 저장 실패 (notices는 정상 저장됨): {e}")
+        elif not supabase_service:
+            print("   [건너뜀] SUPABASE_SERVICE_ROLE_KEY가 없어 청크 생성을 건너뜁니다.")
 
         subscribers = get_subscribers_for_categories(categories)
         print(f"   구독자 {len(subscribers)}명에게 알림 발송 시도...")
