@@ -38,6 +38,7 @@ from pywebpush import webpush, WebPushException
 from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
 from chunk_and_embed import save_notice_chunks, EMBEDDING_MODEL_NAME
+from extract_deadline import extract_deadline
 
 # pipeline.py가 있는 폴더 기준으로 .env 찾기
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
@@ -378,6 +379,17 @@ def main():
         categories = predict_category(classifier, notice["title"])
         print(f"   분류 결과: {categories}")
 
+        deadline = None
+        if USE_OCR:  # ocr_model이 있을 때만 (GEMINI_API_KEY 있는 경우)
+            print("   마감일 추출 중...")
+            deadline = extract_deadline(
+                title=notice["title"],
+                content=body_text,
+                published_at=notice["published_at"],
+                ocr_model=ocr_model,
+            )
+            print(f"   마감일: {deadline or '없음'}")
+
         result = supabase.table("notices").insert({
             "source_notice_id": notice["article_no"],
             "title": notice["title"],
@@ -385,6 +397,7 @@ def main():
             "published_at": notice["published_at"],
             "category": categories,
             "content": body_text,
+            "deadline": deadline,
         }).execute()
         print("   DB 저장 완료")
 
