@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "홍익 공지알리미",
+  title: "NotiCE",
   description: "홍익대 컴퓨터공학과 공지사항을 카테고리별로 구독하고 웹 푸시 알림을 받는 서비스",
 };
 

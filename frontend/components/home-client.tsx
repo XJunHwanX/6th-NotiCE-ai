@@ -62,7 +62,7 @@ export function HomeClient({ notices }: { notices: Notice[] }) {
           </div>
           <div className="min-w-0">
             <h1 className="text-base font-bold leading-tight tracking-tight text-foreground">
-              홍익 공지알리미
+              NotiCE
             </h1>
             <p className="text-[11px] leading-tight text-muted-foreground">
               컴퓨터공학과 공지사항
