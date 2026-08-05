@@ -30,6 +30,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { subscribeToPush } from "@/lib/push";
 
 /* ------------------------------------------------------------------ */
 /* Data                                                                */
@@ -79,7 +80,9 @@ export default function OnboardingPage() {
   const [[step, direction], setStep] = React.useState<[number, number]>([1, 0]);
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [permission, setPermission] =
-    React.useState<NotificationPermission | "unsupported" | null>(null);
+    React.useState<NotificationPermission | "unsupported" | "error" | null>(
+      null
+    );
   const [done, setDone] = React.useState(false);
 
   const paginate = (next: number) =>
@@ -95,16 +98,16 @@ export default function OnboardingPage() {
   };
 
   const requestPermission = async () => {
-    if (typeof window === "undefined" || !("Notification" in window)) {
-      setPermission("unsupported");
-      setDone(true);
-      return;
-    }
-    try {
-      const result = await Notification.requestPermission();
-      setPermission(result);
-    } catch {
+    const result = await subscribeToPush([...selected]);
+    if (result.ok) {
+      setPermission("granted");
+    } else if (result.reason === "denied") {
       setPermission("denied");
+    } else if (result.reason === "unsupported") {
+      setPermission("unsupported");
+    } else {
+      // "not-configured" | "error"
+      setPermission("error");
     }
     setDone(true);
   };
@@ -123,7 +126,7 @@ export default function OnboardingPage() {
             <Bell className="h-5 w-5" />
           </div>
           <span className="text-lg font-bold tracking-tight text-foreground">
-            홍익 공지알리미
+            NotiCE
           </span>
         </div>
 
@@ -434,7 +437,7 @@ function DoneStep({
   permission,
   selectedCount,
 }: {
-  permission: NotificationPermission | "unsupported" | null;
+  permission: NotificationPermission | "unsupported" | "error" | null;
   selectedCount: number;
 }) {
   const granted = permission === "granted";
@@ -444,6 +447,8 @@ function DoneStep({
     ? "알림 권한이 꺼져 있어요. 브라우저 설정에서 언제든 켤 수 있어요."
     : permission === "unsupported"
     ? "이 브라우저는 웹 푸시를 지원하지 않지만, 구독 설정은 저장됐어요."
+    : permission === "error"
+    ? "알림 설정 중 문제가 생겼어요. 나중에 설정에서 다시 켤 수 있어요."
     : "설정이 저장됐어요. 알림은 나중에 켤 수 있어요.";
 
   return (
