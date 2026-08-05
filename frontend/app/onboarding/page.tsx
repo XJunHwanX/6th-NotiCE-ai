@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { AnimatePresence, motion } from "motion/react";
 import {
   BookOpen,
@@ -474,8 +475,8 @@ function DoneStep({
           {selectedCount}개
         </span>
       </div>
-      <Button size="lg" className="mt-6 w-full">
-        공지 보러가기
+      <Button asChild size="lg" className="mt-6 w-full">
+        <Link href="/">공지 보러가기</Link>
       </Button>
     </div>
   );
