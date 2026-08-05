@@ -15,7 +15,7 @@ type Tab = {
 const TABS: Tab[] = [
   { id: "home", label: "홈", icon: Home, href: "/" },
   { id: "chat", label: "챗봇", icon: MessageCircle, href: null },
-  { id: "settings", label: "설정", icon: Settings, href: null },
+  { id: "settings", label: "설정", icon: Settings, href: "/settings" },
 ];
 
 export function TabBar({ active = "home" }: { active?: TabId }) {
