@@ -1,20 +1,13 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { AnimatePresence, motion } from "motion/react";
-import {
-  ChevronLeft,
-  Bell,
-  BellOff,
-  BellRing,
-  Check,
-  CircleAlert,
-} from "lucide-react";
+import { Bell, BellOff, BellRing, Check, CircleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { CategoryTag } from "@/components/category-tag";
+import { TabBar } from "@/components/tab-bar";
 import { CATEGORIES, type CategoryId } from "@/lib/categories";
 import { isPushSupported, subscribeToPush } from "@/lib/push";
 import {
@@ -99,17 +92,20 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col bg-background">
+    <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col bg-background pb-20">
       {/* Header */}
-      <header className="sticky top-0 z-20 flex items-center gap-1 border-b border-border bg-background/90 px-2 py-2.5 backdrop-blur">
-        <Link
-          href="/"
-          aria-label="홈으로"
-          className="flex h-10 w-10 items-center justify-center rounded-md text-foreground transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <ChevronLeft className="h-5 w-5" />
-        </Link>
-        <span className="text-sm font-semibold text-foreground">알림 설정</span>
+      <header className="sticky top-0 z-20 flex items-center gap-2 border-b border-border bg-background/90 px-4 py-3 backdrop-blur">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
+          <Bell className="h-[18px] w-[18px]" />
+        </div>
+        <div className="min-w-0">
+          <h1 className="text-base font-bold leading-tight tracking-tight text-foreground">
+            알림 설정
+          </h1>
+          <p className="text-[11px] leading-tight text-muted-foreground">
+            카테고리별 공지 알림
+          </p>
+        </div>
       </header>
 
       <main className="flex-1 px-5 py-5">
@@ -186,6 +182,8 @@ export default function SettingsPage() {
           </div>
         </div>
       </main>
+
+      <TabBar active="settings" />
     </div>
   );
 }
