@@ -52,14 +52,24 @@ export async function sendChat(
     throw new Error(`답변을 가져오지 못했어요 (${res.status})${detail}`);
   }
 
-  return (await res.json()) as ChatResponse;
+  const data = (await res.json()) as ChatResponse;
+  return { ...data, answer: stripInlineSources(data.answer) };
+}
+
+/**
+ * 백엔드(rag/src/llm.py)가 답변 끝에 붙이는 "[참고한 공지]" + 생 URL 블록을 제거합니다.
+ * 같은 공지를 `sources` 배열로도 받아 출처 카드로 보여주므로, 본문에선 중복을 덜어냅니다.
+ */
+function stripInlineSources(answer: string): string {
+  const idx = answer.indexOf("[참고한 공지]");
+  return (idx === -1 ? answer : answer.slice(0, idx)).trimEnd();
 }
 
 /** 빈 화면과 입력창 위 퀵칩에 공통으로 쓰는 자주 묻는 질문. */
 export const SUGGESTED_QUESTIONS = [
   "이번 주 마감인 공지 있어?",
   "국가장학금 언제까지 신청해?",
-  "졸업 요건이 궁금해",
+  "시험 일정 및 공지",
   "이번 학기 수강신청 일정 알려줘",
   "요즘 올라온 채용·인턴 공지 있어?",
   "교내 대회나 공모전 뭐 있어?",

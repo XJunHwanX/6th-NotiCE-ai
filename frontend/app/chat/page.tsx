@@ -13,6 +13,7 @@ import {
 
 import { cn } from "@/lib/utils";
 import { TabBar } from "@/components/tab-bar";
+import { ChatMarkdown } from "@/components/chat-markdown";
 import {
   sendChat,
   SUGGESTED_QUESTIONS,
@@ -270,16 +271,20 @@ function BotBubble({ message }: { message: Message }) {
       <div className="min-w-0 flex-1 space-y-2">
         <div
           className={cn(
-            "inline-block max-w-full whitespace-pre-wrap break-words rounded-2xl rounded-tl-md px-4 py-2.5 text-sm leading-relaxed",
+            "w-fit max-w-full break-words rounded-2xl rounded-tl-md px-4 py-2.5 text-sm leading-relaxed",
             message.error
               ? "bg-red-50 text-red-700"
               : "bg-secondary text-foreground"
           )}
         >
-          {message.error && (
-            <CircleAlert className="mr-1 inline h-4 w-4 -translate-y-0.5" />
+          {message.error ? (
+            <span className="flex items-start gap-1.5">
+              <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+              <span className="whitespace-pre-wrap">{message.text}</span>
+            </span>
+          ) : (
+            <ChatMarkdown>{message.text}</ChatMarkdown>
           )}
-          {message.text}
         </div>
 
         {message.sources && message.sources.length > 0 && (
