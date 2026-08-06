@@ -3,6 +3,8 @@
  * 로그인이 없는 서비스라 브라우저의 PushSubscription 자체가 익명 사용자 식별자가 됩니다.
  */
 
+import { getSupabase, isSupabaseConfigured } from "./supabase";
+
 const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
 
 export type SubscribeResult =
@@ -41,26 +43,46 @@ export function registerServiceWorker(): Promise<ServiceWorkerRegistration> {
 }
 
 /**
- * 생성된 구독 객체를 서버에 저장하는 자리.
- * TODO(backend): 구독 저장 엔드포인트가 준비되면 아래 fetch 주석을 실제 URL로 교체.
+ * 생성된 구독을 Supabase `push_subscriptions` 테이블에 endpoint 기준으로 upsert합니다.
  *
- *   await fetch("/api/subscriptions", {
- *     method: "POST",
- *     headers: { "Content-Type": "application/json" },
- *     body: JSON.stringify({ subscription: subscription.toJSON(), categories }),
- *   });
+ * 팀 합의(backend/README.md): 로그인이 없는 프론트는 별도 API 대신 anon 키로
+ * Supabase에 직접 저장합니다. 프론트가 넘기는 영문 카테고리 ID(`academic` 등)는
+ * DB 트리거가 파이프라인의 한글 카테고리로 자동 변환하고, 빈 배열이면 enabled를
+ * false로 내립니다.
  *
- * 지금은 백엔드 미구현 상태라 콘솔에 구독 객체만 출력합니다.
+ * Supabase 환경변수가 없는 로컬(더미 모드)에서는 저장을 생략하고 콘솔에만 남깁니다.
  */
 async function sendSubscriptionToServer(
   subscription: PushSubscription,
   categories: string[]
 ): Promise<void> {
-  console.log(
-    "[push] 구독 객체 (서버 전송 예정):",
-    JSON.stringify(subscription.toJSON(), null, 2)
-  );
-  console.log("[push] 구독 카테고리:", categories);
+  const json = subscription.toJSON();
+
+  if (!isSupabaseConfigured()) {
+    console.log(
+      "[push] Supabase 미설정 — 구독 저장을 건너뜁니다:",
+      JSON.stringify(json, null, 2),
+      categories
+    );
+    return;
+  }
+
+  const { error } = await getSupabase()
+    .from("push_subscriptions")
+    .upsert(
+      {
+        endpoint: json.endpoint,
+        p256dh: json.keys?.p256dh,
+        auth: json.keys?.auth,
+        categories,
+        enabled: categories.length > 0,
+      },
+      { onConflict: "endpoint" }
+    );
+
+  if (error) {
+    throw new Error(`구독 저장에 실패했어요: ${error.message}`);
+  }
 }
 
 /**

@@ -3,7 +3,14 @@
 import * as React from "react";
 import Link from "next/link";
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronLeft, Bell, BellOff, BellRing, Check } from "lucide-react";
+import {
+  ChevronLeft,
+  Bell,
+  BellOff,
+  BellRing,
+  Check,
+  CircleAlert,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -24,7 +31,10 @@ export default function SettingsPage() {
   );
   const [mounted, setMounted] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
-  const [saved, setSaved] = React.useState(false);
+  const [feedback, setFeedback] = React.useState<{
+    type: "ok" | "error";
+    text: string;
+  } | null>(null);
 
   // localStorage / Notification 은 클라이언트에서만 접근 → 마운트 후 로드
   React.useEffect(() => {
@@ -40,23 +50,52 @@ export default function SettingsPage() {
       else next.add(id);
       return next;
     });
-    setSaved(false);
+    setFeedback(null);
   };
 
   const handleSave = async () => {
     setSaving(true);
     setSubscribedCategories([...selected]);
-    // 권한 요청 + 구독 갱신(서버 전송 자리). 이미 허용된 경우 프롬프트 없이 통과.
-    await subscribeToPush([...selected]);
+    // 권한 요청 + 구독을 Supabase에 저장. 이미 허용된 경우 프롬프트 없이 통과.
+    const result = await subscribeToPush([...selected]);
     if (isPushSupported()) setPermission(Notification.permission);
     setSaving(false);
-    setSaved(true);
+
+    if (result.ok) {
+      setFeedback({
+        type: "ok",
+        text: selected.size > 0 ? "알림 설정이 저장되었어요" : "모든 알림을 껐어요",
+      });
+    } else if (result.reason === "denied") {
+      setFeedback({
+        type: "error",
+        text: "알림 권한이 거부되어 알림을 받을 수 없어요",
+      });
+    } else if (
+      result.reason === "unsupported" ||
+      result.reason === "not-configured"
+    ) {
+      // 이 브라우저/환경은 푸시가 안 되지만 카테고리 설정은 로컬에 저장됨
+      setFeedback({ type: "ok", text: "설정을 저장했어요" });
+    } else {
+      setFeedback({ type: "error", text: result.message });
+    }
   };
 
   const enableNotifications = async () => {
+    setSubscribedCategories([...selected]);
     const result = await subscribeToPush([...selected]);
     if (isPushSupported()) setPermission(Notification.permission);
-    if (result.ok) setSaved(true);
+    if (result.ok) {
+      setFeedback({ type: "ok", text: "알림을 켰어요" });
+    } else if (result.reason === "denied") {
+      setFeedback({ type: "error", text: "알림 권한이 거부되었어요" });
+    } else if (
+      result.reason !== "unsupported" &&
+      result.reason !== "not-configured"
+    ) {
+      setFeedback({ type: "error", text: result.message });
+    }
   };
 
   return (
@@ -123,19 +162,24 @@ export default function SettingsPage() {
             {saving ? "저장 중…" : "저장하기"}
           </Button>
 
-          <div className="mt-3 flex h-5 items-center justify-center">
-            <AnimatePresence>
-              {saved && (
+          <div className="mt-3 flex min-h-5 items-center justify-center">
+            <AnimatePresence mode="wait">
+              {feedback && (
                 <motion.p
+                  key={feedback.text}
                   initial={{ opacity: 0, y: 4 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0 }}
-                  className="flex items-center gap-1 text-sm font-medium text-primary"
+                  className={`flex items-center gap-1 text-sm font-medium ${
+                    feedback.type === "ok" ? "text-primary" : "text-red-600"
+                  }`}
                 >
-                  <Check className="h-4 w-4" strokeWidth={3} />
-                  {selected.size > 0
-                    ? "알림 설정이 저장되었어요"
-                    : "모든 알림을 껐어요"}
+                  {feedback.type === "ok" ? (
+                    <Check className="h-4 w-4 shrink-0" strokeWidth={3} />
+                  ) : (
+                    <CircleAlert className="h-4 w-4 shrink-0" />
+                  )}
+                  {feedback.text}
                 </motion.p>
               )}
             </AnimatePresence>
