@@ -1,13 +1,13 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronLeft, Bell, BellOff, BellRing, Check } from "lucide-react";
+import { Bell, BellOff, BellRing, Check, CircleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { CategoryTag } from "@/components/category-tag";
+import { TabBar } from "@/components/tab-bar";
 import { CATEGORIES, type CategoryId } from "@/lib/categories";
 import { isPushSupported, subscribeToPush } from "@/lib/push";
 import {
@@ -24,7 +24,10 @@ export default function SettingsPage() {
   );
   const [mounted, setMounted] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
-  const [saved, setSaved] = React.useState(false);
+  const [feedback, setFeedback] = React.useState<{
+    type: "ok" | "error";
+    text: string;
+  } | null>(null);
 
   // localStorage / Notification 은 클라이언트에서만 접근 → 마운트 후 로드
   React.useEffect(() => {
@@ -40,37 +43,69 @@ export default function SettingsPage() {
       else next.add(id);
       return next;
     });
-    setSaved(false);
+    setFeedback(null);
   };
 
   const handleSave = async () => {
     setSaving(true);
     setSubscribedCategories([...selected]);
-    // 권한 요청 + 구독 갱신(서버 전송 자리). 이미 허용된 경우 프롬프트 없이 통과.
-    await subscribeToPush([...selected]);
+    // 권한 요청 + 구독을 Supabase에 저장. 이미 허용된 경우 프롬프트 없이 통과.
+    const result = await subscribeToPush([...selected]);
     if (isPushSupported()) setPermission(Notification.permission);
     setSaving(false);
-    setSaved(true);
+
+    if (result.ok) {
+      setFeedback({
+        type: "ok",
+        text: selected.size > 0 ? "알림 설정이 저장되었어요" : "모든 알림을 껐어요",
+      });
+    } else if (result.reason === "denied") {
+      setFeedback({
+        type: "error",
+        text: "알림 권한이 거부되어 알림을 받을 수 없어요",
+      });
+    } else if (
+      result.reason === "unsupported" ||
+      result.reason === "not-configured"
+    ) {
+      // 이 브라우저/환경은 푸시가 안 되지만 카테고리 설정은 로컬에 저장됨
+      setFeedback({ type: "ok", text: "설정을 저장했어요" });
+    } else {
+      setFeedback({ type: "error", text: result.message });
+    }
   };
 
   const enableNotifications = async () => {
+    setSubscribedCategories([...selected]);
     const result = await subscribeToPush([...selected]);
     if (isPushSupported()) setPermission(Notification.permission);
-    if (result.ok) setSaved(true);
+    if (result.ok) {
+      setFeedback({ type: "ok", text: "알림을 켰어요" });
+    } else if (result.reason === "denied") {
+      setFeedback({ type: "error", text: "알림 권한이 거부되었어요" });
+    } else if (
+      result.reason !== "unsupported" &&
+      result.reason !== "not-configured"
+    ) {
+      setFeedback({ type: "error", text: result.message });
+    }
   };
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col bg-background">
+    <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col bg-background pb-20">
       {/* Header */}
-      <header className="sticky top-0 z-20 flex items-center gap-1 border-b border-border bg-background/90 px-2 py-2.5 backdrop-blur">
-        <Link
-          href="/"
-          aria-label="홈으로"
-          className="flex h-10 w-10 items-center justify-center rounded-md text-foreground transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <ChevronLeft className="h-5 w-5" />
-        </Link>
-        <span className="text-sm font-semibold text-foreground">알림 설정</span>
+      <header className="sticky top-0 z-20 flex items-center gap-2 border-b border-border bg-background/90 px-4 py-3 backdrop-blur">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
+          <Bell className="h-[18px] w-[18px]" />
+        </div>
+        <div className="min-w-0">
+          <h1 className="text-base font-bold leading-tight tracking-tight text-foreground">
+            알림 설정
+          </h1>
+          <p className="text-[11px] leading-tight text-muted-foreground">
+            카테고리별 공지 알림
+          </p>
+        </div>
       </header>
 
       <main className="flex-1 px-5 py-5">
@@ -123,25 +158,32 @@ export default function SettingsPage() {
             {saving ? "저장 중…" : "저장하기"}
           </Button>
 
-          <div className="mt-3 flex h-5 items-center justify-center">
-            <AnimatePresence>
-              {saved && (
+          <div className="mt-3 flex min-h-5 items-center justify-center">
+            <AnimatePresence mode="wait">
+              {feedback && (
                 <motion.p
+                  key={feedback.text}
                   initial={{ opacity: 0, y: 4 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0 }}
-                  className="flex items-center gap-1 text-sm font-medium text-primary"
+                  className={`flex items-center gap-1 text-sm font-medium ${
+                    feedback.type === "ok" ? "text-primary" : "text-red-600"
+                  }`}
                 >
-                  <Check className="h-4 w-4" strokeWidth={3} />
-                  {selected.size > 0
-                    ? "알림 설정이 저장되었어요"
-                    : "모든 알림을 껐어요"}
+                  {feedback.type === "ok" ? (
+                    <Check className="h-4 w-4 shrink-0" strokeWidth={3} />
+                  ) : (
+                    <CircleAlert className="h-4 w-4 shrink-0" />
+                  )}
+                  {feedback.text}
                 </motion.p>
               )}
             </AnimatePresence>
           </div>
         </div>
       </main>
+
+      <TabBar active="settings" />
     </div>
   );
 }

@@ -82,7 +82,6 @@ export function HomeClient({ notices }: { notices: Notice[] }) {
               key={cat.id}
               label={cat.label}
               active={selected.has(cat.id)}
-              dotClass={cat.dotClass}
               onClick={() => toggleCategory(cat.id)}
             />
           ))}
@@ -152,12 +151,10 @@ export function HomeClient({ notices }: { notices: Notice[] }) {
 function FilterChip({
   label,
   active,
-  dotClass,
   onClick,
 }: {
   label: string;
   active: boolean;
-  dotClass?: string;
   onClick: () => void;
 }) {
   return (
@@ -173,11 +170,7 @@ function FilterChip({
           : "border-border bg-background text-foreground hover:border-primary/40 hover:bg-accent/60"
       )}
     >
-      {active ? (
-        <Check className="h-3.5 w-3.5" strokeWidth={3} />
-      ) : dotClass ? (
-        <span className={cn("h-2 w-2 rounded-full", dotClass)} />
-      ) : null}
+      {active && <Check className="h-3.5 w-3.5" strokeWidth={3} />}
       {label}
     </motion.button>
   );
