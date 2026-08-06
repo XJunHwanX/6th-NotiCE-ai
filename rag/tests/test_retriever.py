@@ -4,7 +4,10 @@ import numpy as np
 
 from rag.src.config import EMBEDDING_DIMENSION
 from rag.src.db import ChunkRepositoryError
-from rag.src.retriever import search_notice_chunks
+from rag.src.retriever import (
+    search_notice_chunks,
+    search_notice_chunks_keyword_only,
+)
 
 
 class FakeModel:
@@ -56,6 +59,26 @@ class FakeChunkRepository:
 
 
 class ChunkRetrieverTests(unittest.TestCase):
+    def test_keyword_only_search_does_not_call_embedding_rpc(self):
+        repository = FakeChunkRepository()
+
+        results = search_notice_chunks_keyword_only(
+            question="장학금 신청 서류 알려줘",
+            repository=repository,
+            top_k=2,
+            deadline_from="2026-07-01T00:00:00+09:00",
+            exclude_notice_ids=[30],
+        )
+
+        self.assertEqual(repository.semantic_calls, [])
+        self.assertEqual([result["notice"]["id"] for result in results], [10])
+        self.assertAlmostEqual(results[0]["hybrid_score"], 0.9)
+        self.assertEqual(repository.keyword_calls[0]["match_count"], 8)
+        self.assertEqual(
+            repository.keyword_calls[0]["exclude_notice_ids"],
+            [30],
+        )
+
     def test_rejects_query_embedding_with_wrong_dimension(self):
         repository = FakeChunkRepository()
 

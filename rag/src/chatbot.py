@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, replace
 from typing import Any
-
-from sentence_transformers import SentenceTransformer
 
 from .config import EMBEDDING_MODEL_NAME
 from .conversation import ConversationState
@@ -21,7 +20,10 @@ from .db import (
 from .intent import QueryIntent, classify_intent
 from .llm import generate_answer, generate_general_answer
 from .preprocess import DEFAULT_PREPROCESSOR, QueryPreprocessor
-from .retriever import search_notice_chunks
+from .retriever import (
+    search_notice_chunks,
+    search_notice_chunks_keyword_only,
+)
 from .router import QueryRoute, get_current_datetime, plan_question, route_to_intent
 from .search import (
     KEYWORD_WEIGHT,
@@ -41,6 +43,7 @@ from .search import (
 
 
 RESET_PATTERNS = {"초기화", "처음부터", "대화 리셋", "검색 리셋"}
+RETRIEVAL_MODES = {"hybrid", "keyword"}
 
 
 class ChatbotConfigurationError(RuntimeError):
@@ -67,6 +70,7 @@ class ChatbotService:
         chunk_repository: ChunkRepository | None = None,
         notices: list[dict] | None = None,
         notice_embeddings: Any = None,
+        retrieval_mode: str = "hybrid",
     ) -> None:
         self.model = model
         self.preprocessor = preprocessor
@@ -75,16 +79,34 @@ class ChatbotService:
         self.chunk_repository = chunk_repository
         self.notices = notices or []
         self.notice_embeddings = notice_embeddings
+        self.retrieval_mode = retrieval_mode
 
     @classmethod
     def create_default(cls) -> "ChatbotService":
         try:
             search_source = get_rag_search_source()
+            retrieval_mode = os.getenv(
+                "RAG_RETRIEVAL_MODE",
+                "hybrid",
+            ).lower()
+            if retrieval_mode not in RETRIEVAL_MODES:
+                raise ValueError(
+                    "RAG_RETRIEVAL_MODE는 hybrid 또는 keyword여야 합니다."
+                )
+            if retrieval_mode == "keyword" and search_source != "chunks":
+                raise ValueError(
+                    "keyword 검색은 RAG_SEARCH_SOURCE=chunks에서만 사용할 수 있습니다."
+                )
+
             notice_repository = get_notice_repository()
             chunk_repository = (
                 get_chunk_repository() if search_source == "chunks" else None
             )
-            model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+            model = None
+            if retrieval_mode == "hybrid":
+                from sentence_transformers import SentenceTransformer
+
+                model = SentenceTransformer(EMBEDDING_MODEL_NAME)
         except Exception as error:
             raise ChatbotConfigurationError(
                 f"챗봇 초기화에 실패했습니다: {error}"
@@ -118,6 +140,7 @@ class ChatbotService:
             chunk_repository=chunk_repository,
             notices=notices,
             notice_embeddings=notice_embeddings,
+            retrieval_mode=retrieval_mode,
         )
 
     def handle_message(
@@ -331,6 +354,19 @@ class ChatbotService:
             if self.chunk_repository is None:
                 raise ChatbotConfigurationError(
                     "공지 청크 검색 저장소가 준비되지 않았습니다."
+                )
+            if self.retrieval_mode == "keyword":
+                return search_notice_chunks_keyword_only(
+                    question=question,
+                    repository=self.chunk_repository,
+                    top_k=TOP_K,
+                    deadline_from=(
+                        get_current_datetime().isoformat()
+                        if query_route == QueryRoute.OPEN_NOTICE_SEARCH
+                        else None
+                    ),
+                    exclude_notice_ids=exclude_notice_ids,
+                    preprocessor=self.preprocessor,
                 )
             return search_notice_chunks(
                 model=self.model,
