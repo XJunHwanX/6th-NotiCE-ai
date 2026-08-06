@@ -1,7 +1,12 @@
+from __future__ import annotations
+
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 if __package__:
     from .config import EMBEDDING_MODEL_NAME
@@ -418,6 +423,8 @@ def print_search_failure(results: list[dict]) -> None:
 # =========================================================
 
 def main() -> None:
+    from sentence_transformers import SentenceTransformer
+
     notices = []
     notice_embeddings = None
     chunk_repository = None

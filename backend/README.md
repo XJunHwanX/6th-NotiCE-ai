@@ -155,7 +155,35 @@ GET /api/push/vapid-public-key
 .venv/bin/python -m unittest discover -s rag/tests -v
 ```
 
-## 6. Hugging Face Spaces 배포
+## 6. Render 무료 배포
+
+레포 최상위의 `render.yaml`을 Blueprint로 연결하면 무료 Web Service가
+생성됩니다. 무료 인스턴스의 메모리 제한에 맞추기 위해 Render에서는
+`RAG_RETRIEVAL_MODE=keyword`를 사용합니다. Gemini 답변 생성과 출처 표시는
+유지되지만, 로컬의 의미 임베딩 검색 대신 Supabase 키워드 RPC로 검색합니다.
+
+Blueprint 생성 화면에서 `sync: false`로 선언된 다음 값을 입력합니다.
+
+```text
+CORS_ORIGINS
+SUPABASE_URL
+SUPABASE_KEY
+SUPABASE_SERVICE_ROLE_KEY
+GEMINI_API_KEY
+VAPID_PUBLIC_KEY
+```
+
+`CORS_ORIGINS`에는 우선 `http://localhost:3000`을 넣고, 프론트 배포 후 실제
+프론트 주소로 변경합니다. `VAPID_PRIVATE_KEY`는 Render에 넣지 않습니다.
+
+배포 후 아래 주소로 확인합니다.
+
+```text
+GET https://notice-api-hongik.onrender.com/health
+GET https://notice-api-hongik.onrender.com/docs
+```
+
+## 7. Hugging Face Spaces 배포
 
 레포 최상위의 `Dockerfile`은 Hugging Face Docker Space와 일반 Docker
 호스팅에서 사용할 수 있습니다. Space 생성 시 SDK를 `Docker`, 무료 하드웨어를
