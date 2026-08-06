@@ -88,3 +88,9 @@ SUPABASE_KEY=...
 공지 검색과 근거 기반 답변을 담당하는 RAG 챗봇은 `rag/`에 분리되어 있습니다.
 구조, 실행 방법, 크롤링 파이프라인과의 데이터 계약은
 [RAG 챗봇 문서](rag/README.md)를 참고하세요.
+
+## 웹 API와 푸시 구독
+
+프론트엔드가 사용하는 FastAPI 서버, 익명 웹 푸시 구독 저장 방식, 실행 방법은
+[`backend/README.md`](backend/README.md)를 참고하세요. 푸시 구독 테이블은
+[`supabase/push_subscriptions.sql`](supabase/push_subscriptions.sql)로 설치합니다.
