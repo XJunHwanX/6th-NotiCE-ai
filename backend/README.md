@@ -46,7 +46,7 @@ Supabase SQL Editor에서
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -c requirements.txt -r backend/requirements.txt
 .venv/bin/uvicorn backend.app.main:app --reload --port 8000
 ```
 
@@ -153,4 +153,40 @@ GET /api/push/vapid-public-key
 ```bash
 .venv/bin/python -m unittest discover -s backend/tests -v
 .venv/bin/python -m unittest discover -s rag/tests -v
+```
+
+## 6. Hugging Face Spaces 배포
+
+레포 최상위의 `Dockerfile`은 Hugging Face Docker Space와 일반 Docker
+호스팅에서 사용할 수 있습니다. Space 생성 시 SDK를 `Docker`, 무료 하드웨어를
+`CPU Basic`으로 선택합니다. 컨테이너는 기본적으로 7860 포트에서 실행되며,
+호스팅 서비스가 `PORT`를 제공하면 해당 값을 우선 사용합니다.
+
+### Secrets
+
+```text
+SUPABASE_SERVICE_ROLE_KEY
+GEMINI_API_KEY
+```
+
+### Variables
+
+```text
+APP_ENV=production
+CORS_ORIGINS=https://your-frontend.example
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your_publishable_or_anon_key
+VAPID_PUBLIC_KEY=your_vapid_public_key
+NOTICE_SOURCE=supabase
+RAG_SEARCH_SOURCE=chunks
+```
+
+`VAPID_PRIVATE_KEY`는 API 서버에 넣지 않습니다. 실제 푸시 발송을 실행하는
+GitHub Actions Repository Secret으로만 관리합니다.
+
+배포 후 아래 주소로 동작을 확인합니다.
+
+```text
+GET https://<space-subdomain>.hf.space/health
+GET https://<space-subdomain>.hf.space/docs
 ```

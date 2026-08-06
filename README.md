@@ -1,3 +1,13 @@
+---
+title: NotiCE API
+emoji: 🔔
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # 6th-NotiCE-ai
 # 컴공 공지 알리미 (NotiCE)
 
