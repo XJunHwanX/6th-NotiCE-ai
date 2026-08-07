@@ -24,6 +24,7 @@ class QueryRoute(str, Enum):
     NOTICE_SEARCH = "notice_search"
     OPEN_NOTICE_SEARCH = "open_notice_search"
     EXAM_NOTICE_SEARCH = "exam_notice_search"
+    MORE_NOTICE_SEARCH = "more_notice_search"
     SELECTED_NOTICE_ANSWER = "selected_notice_answer"
     GENERAL_CHAT = "general_chat"
     CLARIFICATION = "clarification"
@@ -57,8 +58,7 @@ def get_current_datetime(now: datetime | None = None) -> datetime:
 
 def create_router_prompt(
     question: str,
-    has_context: bool,
-    has_active_notice: bool,
+    router_context: str = "",
     now: datetime | None = None,
 ) -> str:
     current_datetime = get_current_datetime(now)
@@ -72,6 +72,7 @@ def create_router_prompt(
 - notice_search: 일반 공지, 장학금, 인턴, 졸업, 행사, 모집 등의 검색
 - open_notice_search: 현재 신청 가능하거나 모집 중인 공지, 마감 임박 공지 검색
 - exam_notice_search: 중간·기말 시험의 날짜, 시간, 장소가 담긴 시험 공지 검색
+- more_notice_search: 이전 검색과 같은 주제에서 아직 보여주지 않은 추가 공지 검색
 - selected_notice_answer: 현재 선택된 공지에 대한 후속 질문
 - general_chat: 인사, 감사처럼 공지 검색이 필요 없는 짧은 대화
 - clarification: 주제나 대상이 없어 검색할 수 없으므로 사용자에게 되물어야 하는 질문
@@ -85,11 +86,30 @@ def create_router_prompt(
 5. clarification일 때만 clarification에 짧은 되묻기 문장을 넣으세요.
 6. 현재 시각은 상대 날짜 표현을 해석할 때만 사용하세요.
 
+[대화 맥락 판단 규칙]
+질문은 반드시 현재 질문만 보고 판단하지 마세요.
+
+반드시 아래 순서대로 판단하세요.
+1. 최근 대화를 확인한다.
+2. 이전 검색 질문을 확인한다.
+3. 선택된 공지가 있다면 그 공지에 대한 질문인지 먼저 판단한다.
+4. 그 후 현재 질문을 해석한다.
+
+현재 질문이 이전 대화의 연속이라면
+새로운 검색보다 기존 공지를 우선 활용하세요.
+
+현재 질문이 새로운 주제라면
+기존 대화를 버리고 새로운 검색을 수행하세요.
+
+사용자가 "더 보여줘", "다른 거", "또 있어?"처럼 이전 검색의 추가 결과를 요구하면
+more_notice_search를 선택하고 이전 검색 질문을 검색 기준으로 사용하세요.
+
 [현재 상태]
 - 현재 시각: {current_datetime.isoformat()}
 - 시간대: Asia/Seoul
-- 이전 검색 맥락 존재: {has_context}
-- 선택된 공지 존재: {has_active_notice}
+
+[대화 컨텍스트]
+{router_context if router_context else "없음"}
 
 [사용자 질문]
 {question}
@@ -145,16 +165,13 @@ def create_fallback_plan(
 
 def plan_question(
     question: str,
-    has_context: bool = False,
-    has_active_notice: bool = False,
+    router_context: str = "",
     client: Any | None = None,
     now: datetime | None = None,
 ) -> QueryPlan:
-    rule_intent = classify_intent(question, has_context=has_context)
     prompt = create_router_prompt(
         question=question,
-        has_context=has_context,
-        has_active_notice=has_active_notice,
+        router_context=router_context,
         now=now,
     )
 
@@ -172,32 +189,17 @@ def plan_question(
     except Exception:
         return create_fallback_plan(
             question=question,
-            has_context=has_context,
-            has_active_notice=has_active_notice,
         )
 
     search_query = parsed.search_query.strip()
     if not search_query:
         return create_fallback_plan(
             question=question,
-            has_context=has_context,
-            has_active_notice=has_active_notice,
         )
 
     clarification = parsed.clarification
     if parsed.route == QueryRoute.CLARIFICATION and not clarification:
         clarification = "어떤 종류의 공지를 찾는지 조금 더 알려주세요."
-
-    if (
-        rule_intent == QueryIntent.EXAM_LOCATION
-        and parsed.route != QueryRoute.EXAM_NOTICE_SEARCH
-    ):
-        return QueryPlan(
-            route=QueryRoute.EXAM_NOTICE_SEARCH,
-            search_query=question.strip(),
-            confidence=1.0,
-            source="rule",
-        )
 
     return QueryPlan(
         route=parsed.route,
@@ -213,5 +215,8 @@ def route_to_intent(route: QueryRoute) -> QueryIntent:
 
     if route == QueryRoute.EXAM_NOTICE_SEARCH:
         return QueryIntent.EXAM_LOCATION
+    
+    if route == QueryRoute.MORE_NOTICE_SEARCH:
+        return QueryIntent.MORE_RESULTS
 
     return QueryIntent.GENERAL_SEARCH

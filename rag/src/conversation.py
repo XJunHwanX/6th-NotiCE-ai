@@ -32,6 +32,7 @@ class ConversationState:
     candidate_results: list[dict] = field(default_factory=list)
     active_result: dict | None = None
     pending_answer_question: str | None = None
+    router_context: list[dict[str, str]] = field(default_factory=list)
 
     @property
     def has_context(self) -> bool:
@@ -185,3 +186,38 @@ class ConversationState:
             ),
             "pending_answer_question": self.pending_answer_question,
         }
+        
+    def add_message(self, role: str, content: str) -> None:
+        self.router_context.append(
+        {
+            "role": role,
+            "content": content.strip(),
+        }
+    )
+        # 최근 6개 메시지만 유지 (최근 3턴)
+        if len(self.router_context) > 6:
+            self.router_context = self.router_context[-6:]    
+    
+    def build_router_context(self) -> str:
+        recent_history = "\n".join(
+        f"{message['role']}: {message['content']}"
+        for message in self.router_context
+        )
+        
+        active_notice_id = None
+        active_notice_title = None
+        
+        if self.active_result:
+            notice = self.active_result.get("notice", {})
+            active_notice_id = notice.get("id")
+            active_notice_title = notice.get("title")
+            
+        return (
+            f"[최근 대화]\n"
+            f"{recent_history or '없음'}\n\n"
+            f"[이전 검색 질문]\n"
+            f"{self.last_search_query or '없음'}\n\n"
+            f"[선택된 공지]\n"
+            f"- ID: {active_notice_id if active_notice_id is not None else '없음'}\n"
+            f"- 제목: {active_notice_title or '없음'}"
+        )   
