@@ -16,7 +16,7 @@ if __package__:
         get_notice_repository,
         get_rag_search_source,
     )
-    from .intent import QueryIntent, classify_intent
+    from .intent import QueryIntent
     from .llm import generate_answer, generate_general_answer
     from .preprocess import DEFAULT_PREPROCESSOR, QueryPreprocessor
     from .retriever import search_notice_chunks
@@ -39,7 +39,7 @@ else:
         get_notice_repository,
         get_rag_search_source,
     )
-    from intent import QueryIntent, classify_intent
+    from intent import QueryIntent
     from llm import generate_answer, generate_general_answer
     from preprocess import DEFAULT_PREPROCESSOR, QueryPreprocessor
     from retriever import search_notice_chunks
@@ -56,23 +56,26 @@ else:
 # =========================================================
 
 # 검색할 최대 공지 개수
-TOP_K = 5
+TOP_K = 15
 
 # 첫 응답에서 사용자가 고를 수 있도록 보여줄 최대 공지 수
 MAX_RESULT_CHOICES = 3
 
 # 하이브리드 검색 가중치
-SEMANTIC_WEIGHT = 0.75
-KEYWORD_WEIGHT = 0.25
+SEMANTIC_WEIGHT = 0.85
+KEYWORD_WEIGHT = 0.15
 
 # 검색 결과 1위가 이 점수보다 낮으면 관련 없는 질문으로 판단
 MIN_TOP_SCORE = 0.67
 
 # 정확 키워드가 충분히 맞으면 의미 점수가 낮아도 관련 공지로 판단
-MIN_KEYWORD_SCORE = 0.6
+MIN_KEYWORD_SCORE = 0.7
 
-# 1위 결과와 점수 차이가 이 값보다 큰 공지는 제외
-MAX_SCORE_GAP = 0.07
+# 키워드 문자열이 달라도 의미가 충분히 유사하다고 판단되면 관련 공지로 판단
+MIN_SEMANTIC_SCORE = 0.8
+
+# 의미 점수 차이가 이 값보다 큰 공지는 제외
+MAX_SEMANTIC_SCORE_GAP = 0.023
 
 # 구체적인 질문은 전체 핵심어 중 절반 이상이 실제 공지에 등장해야 함
 MIN_SPECIFIC_QUERY_KEYWORDS = 3
@@ -126,7 +129,6 @@ def extract_keywords(
 ) -> list[str]:
     """사용자 질문에서 키워드 검색에 사용할 단어를 추출합니다."""
     return preprocessor.extract_keywords(question)
-
 
 def calculate_keyword_score(
     question: str,
@@ -269,7 +271,7 @@ def get_relevant_notices(
     results: list[dict],
     min_top_score: float = MIN_TOP_SCORE,
     min_keyword_score: float = MIN_KEYWORD_SCORE,
-    max_score_gap: float = MAX_SCORE_GAP,
+    min_semantic_score: float = MIN_SEMANTIC_SCORE,
     required_keywords: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict]:
     """
@@ -283,10 +285,20 @@ def get_relevant_notices(
 
     top_score = results[0]["hybrid_score"]
 
-    top_keyword_score = results[0]["keyword_score"]
-
+    top_keyword_score = max(
+        result["keyword_score"] for result in results
+    )
+    
+    top_semantic_score = max(
+        result["semantic_score"] for result in results
+    )
+    
     # 하이브리드 점수와 키워드 점수가 모두 낮으면 관련 공지 없음
-    if top_score < min_top_score and top_keyword_score < min_keyword_score:
+    if (
+        top_score < min_top_score 
+        and top_keyword_score < min_keyword_score
+        and top_semantic_score < min_semantic_score
+    ):
         return []
 
     relevant_results = []
@@ -297,12 +309,19 @@ def get_relevant_notices(
     }
 
     for result in results:
-        score = result["hybrid_score"]
-        score_gap = top_score - score
+        semantic_score_gap = top_semantic_score - result["semantic_score"]
+        
+        has_strong_keyword_match = (
+            result["keyword_score"] >= min_keyword_score
+        )
+        has_strong_semantic_match = (
+            result["semantic_score"] >= min_semantic_score
+            and semantic_score_gap <= MAX_SEMANTIC_SCORE_GAP
+        )
 
         if (
-            score_gap <= max_score_gap
-            or result["keyword_score"] >= min_keyword_score
+            has_strong_keyword_match
+            or has_strong_semantic_match
         ):
             if len(unique_required_keywords) >= MIN_SPECIFIC_QUERY_KEYWORDS:
                 matched_keywords = {
@@ -393,9 +412,21 @@ def should_answer_without_selection(route: QueryRoute | None) -> bool:
 # 결과 출력
 # =========================================================
 
+def print_and_record_answer(
+    conversation: ConversationState,
+    answer: str,
+    context_message: str | None = None,
+) -> None:
+    """챗봇 답변을 출력하고 Router용 대화 기록을 저장합니다."""
+    conversation.add_message(
+        "assistant",
+        context_message or answer,
+    )
+    print("\n===== 챗봇 답변 =====")
+    print(answer)
+
 def print_search_failure(results: list[dict]) -> None:
     """관련 공지를 찾지 못했을 때 검색 정보를 출력합니다."""
-    print("\n관련 공지를 찾지 못했습니다.")
 
     if not results:
         return
@@ -517,8 +548,14 @@ def main() -> None:
                 relevant_results=[selected_result],
                 answer_mode="focused",
             )
-            print("\n===== 챗봇 답변 =====")
-            print(answer)
+            notice = selected_result.get("notice", {})
+            print_and_record_answer(
+                conversation,
+                answer,
+                context_message=(
+                    f"'{notice.get('title') or '제목 없음'}' 공지를 선택해 답변함"
+                ),
+            )
             continue
 
         if (
@@ -530,8 +567,12 @@ def main() -> None:
                 conversation.candidate_results
             )
             conversation.candidate_results = sorted_results
-            print("\n===== 챗봇 답변 =====")
-            print(create_result_selection_answer(sorted_results))
+            answer = create_result_selection_answer(sorted_results)
+            print_and_record_answer(
+                conversation,
+                answer,
+                context_message = "이전 검색 결과를 최신순으로 다시 정렬해 제시함",
+            )
             continue
 
         processed_query = preprocessor.process(question)
@@ -543,90 +584,70 @@ def main() -> None:
                 for match in processed_query.resolved_aliases
             )
             print(f"은어 해석: {resolved_text}")
-        rule_intent = classify_intent(
-            processed_query.normalized,
-            has_context=conversation.has_context,
-        )
-
-        if (
-            conversation.active_result
-            and rule_intent in {QueryIntent.FOLLOW_UP, QueryIntent.NOTICE_SUMMARY}
-        ):
-            answer = generate_answer(
-                question=processed_query.normalized,
-                relevant_results=[conversation.active_result],
-                answer_mode="focused",
-            )
-            print("\n===== 챗봇 답변 =====")
-            print(answer)
-            continue
-
-        if (
-            conversation.has_candidates
-            and conversation.active_result is None
-            and rule_intent in {QueryIntent.FOLLOW_UP, QueryIntent.NOTICE_SUMMARY}
-        ):
-            print(
-                "\n===== 챗봇 답변 =====\n"
-                "먼저 궁금한 공지의 번호나 제목을 선택해주세요."
-            )
-            continue
 
         query_route = None
 
-        if rule_intent == QueryIntent.MORE_RESULTS:
-            intent = rule_intent
-        elif rule_intent == QueryIntent.NOTICE_SUMMARY:
-            print(
-                "\n===== 챗봇 답변 =====\n"
-                "요약할 공지를 먼저 검색하거나 선택해주세요."
+        router_context = conversation.build_router_context()
+        plan = plan_question(
+            question=processed_query.normalized,
+            router_context=router_context,
+        )
+        
+        conversation.add_message(
+            "user",
+            processed_query.normalized,
+        )
+            
+        query_route = plan.route
+        route_source = "LLM" if plan.source == "llm" else "기본 규칙"
+        print(f"질문 경로: {plan.route.value} ({route_source})")
+
+        if plan.route == QueryRoute.SELECTED_NOTICE_ANSWER:
+            if conversation.active_result is None:
+                print(
+                    "\n===== 챗봇 답변 =====\n"
+                    "먼저 궁금한 공지를 검색하고 선택해주세요."
+                )
+                continue
+
+            answer = generate_answer(
+                question=answer_question,
+                relevant_results=[conversation.active_result],
+                answer_mode="focused",
+            )
+            notice = conversation.active_result.get("notice", {})
+            print_and_record_answer(
+                conversation,
+                answer,
+                context_message=(
+                    f"[선택된 공지] '{notice.get('title') or '제목 없음'}'에 대해 "
+                    f"사용자의 질문에 답변함"
+                ),
             )
             continue
-        else:
-            plan = plan_question(
-                question=processed_query.normalized,
-                has_context=conversation.has_context,
-                has_active_notice=conversation.active_result is not None,
+
+        if plan.route == QueryRoute.GENERAL_CHAT:
+            answer = generate_general_answer(plan.search_query)
+            
+            print_and_record_answer(conversation, answer)
+            continue
+
+        if plan.route == QueryRoute.CLARIFICATION:
+            clarification = plan.clarification or (
+                "어떤 종류의 공지를 찾는지 조금 더 알려주세요."
             )
-            query_route = plan.route
-            route_source = "LLM" if plan.source == "llm" else "기본 규칙"
-            print(f"질문 경로: {plan.route.value} ({route_source})")
-
-            if plan.route == QueryRoute.SELECTED_NOTICE_ANSWER:
-                if conversation.active_result is None:
-                    print(
-                        "\n===== 챗봇 답변 =====\n"
-                        "먼저 궁금한 공지를 검색하고 선택해주세요."
-                    )
-                    continue
-
-                answer = generate_answer(
-                    question=answer_question,
-                    relevant_results=[conversation.active_result],
-                    answer_mode="focused",
-                )
-                print("\n===== 챗봇 답변 =====")
-                print(answer)
-                continue
-
-            if plan.route == QueryRoute.GENERAL_CHAT:
-                answer = generate_general_answer(plan.search_query)
-                print("\n===== 챗봇 답변 =====")
-                print(answer)
-                continue
-
-            if plan.route == QueryRoute.CLARIFICATION:
-                clarification = plan.clarification or (
-                    "어떤 종류의 공지를 찾는지 조금 더 알려주세요."
-                )
-                print(f"\n===== 챗봇 답변 =====\n{clarification}")
-                continue
-
-            intent = route_to_intent(plan.route)
-            processed_query = replace(
-                processed_query,
-                normalized=plan.search_query,
+            print_and_record_answer(
+                conversation,
+                clarification,
+                context_message="사용자에게 질문을 더 구체적으로 알려달라고 요청함",
             )
+            continue
+
+        intent = route_to_intent(plan.route)
+        processed_query = replace(
+            processed_query,
+            normalized=plan.search_query,
+        )
 
         resolution = conversation.resolve(processed_query, intent)
 
@@ -673,6 +694,21 @@ def main() -> None:
                 "DB 준비 전에는 RAG_SEARCH_SOURCE=notices로 실행해주세요."
             )
             continue
+        
+        print("\n[필터링 전 검색 결과]")
+        
+        for index, result in enumerate(search_results, start=1):
+            notice = result["notice"]
+            best_semantic_chunk = result.get("best_semantic_chunk") or {}
+            best_keyword_chunk = result.get("best_keyword_chunk") or {}
+            
+            print(
+                f"{index}. {notice.get('title')}\n"
+                f"   hybrid={result['hybrid_score']:.4f}, "
+                f"semantic={result['semantic_score']:.4f}, "
+                f"keyword={result['keyword_score']:.4f}, "
+                f"matched={result.get('matched_keywords', [])}\n"
+                )
 
         relevant_results = get_relevant_notices(
             results=search_results,
@@ -680,20 +716,44 @@ def main() -> None:
                 resolution.search_question
             ),
         )
+        
+        print("\n[필터링 후 검색 결과]")
+        
+        for index, result in enumerate(relevant_results, start=1):
+            print(
+                f"{index}. {result['notice'].get('title')}\n"
+                f"   hybrid={result['hybrid_score']:.4f}, "
+                f"semantic={result['semantic_score']:.4f}, "
+                f"keyword={result['keyword_score']:.4f}, "
+                f"matched={result.get('matched_keywords', [])}"
+                )
 
         if not relevant_results:
             if resolution.intent == QueryIntent.MORE_RESULTS:
-                print("\n현재 저장된 공지 중 추가 결과가 없습니다.")
-                continue
-
-            if query_route == QueryRoute.OPEN_NOTICE_SEARCH:
-                print(
-                    "\n현재 신청 가능한 공지를 확인하지 못했습니다. "
-                    "크롤링 파이프라인의 notices.deadline 적재 상태를 "
-                    "확인해주세요."
+                print_and_record_answer(
+                    conversation,
+                    "현재 저장된 공지 중 추가 결과가 없습니다.",
+                    context_message = "이전 검색 주제에서 추가 공지를 찾지 못함"
                 )
                 continue
 
+            if query_route == QueryRoute.OPEN_NOTICE_SEARCH:
+                answer = (
+                    "현재 신청 가능한 공지를 확인하지 못했습니다. "
+                    "크롤링 파이프라인의 notices.deadline 적재 상태를  "
+                    "확인해주세요."
+                )
+                print_and_record_answer(
+                    conversation,
+                    answer,
+                    context_message = "현재 신청 가능한 공지를 찾지 못함"
+                )
+                continue
+            print_and_record_answer(
+                conversation,
+                "관련 공지를 찾지 못했습니다.",
+                context_message = "현재 질문과 관련된 공지를 찾지 못함"
+            )
             print_search_failure(search_results)
             continue
 
@@ -726,13 +786,31 @@ def main() -> None:
                 relevant_results=direct_results,
                 answer_mode="focused",
             )
-            print("\n===== 챗봇 답변 =====")
-            print(answer)
+            notice = direct_results[0]["notice"]
+            print_and_record_answer(
+                conversation,
+                answer,
+                context_message=(
+                    f"'{notice.get('title') or '제목 없음'}' 공지에 대해 바로 답변함"
+                ),
+            )
             continue
 
         if len(displayed_results) > 1:
-            print("\n===== 챗봇 답변 =====")
-            print(create_result_selection_answer(displayed_results))
+            answer = create_result_selection_answer(displayed_results)
+            
+            titles = [
+                result["notice"].get("title") or "제목 없음"
+                for result in displayed_results
+            ]
+            print_and_record_answer(
+                conversation,
+                answer,
+                context_message=(
+                    "관련 공지 목록을 제시함: "
+                    + " / ".join(titles)
+                ),
+            )
             continue
 
         active_result = displayed_results[0]
@@ -747,15 +825,21 @@ def main() -> None:
                 print(f"공지 전체 본문을 불러오지 못했습니다: {error}")
 
         conversation.active_result = active_result
+        notice = active_result.get("notice", {})
 
         answer = generate_answer(
             question=answer_question,
             relevant_results=[active_result],
             answer_mode="focused",
         )
-
-        print("\n===== 챗봇 답변 =====")
-        print(answer)
+        
+        print_and_record_answer(
+            conversation,
+            answer,
+            context_message=(
+                f"'{notice.get('title') or '제목 없음'}' 공지에 대해 답변함"
+            ),
+        )
 
 if __name__ == "__main__":
     main()

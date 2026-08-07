@@ -98,6 +98,11 @@ def _group_chunks_by_notice(
                 "semantic_score": chunk["semantic_score"],
                 "keyword_score": chunk["keyword_score"],
                 "matched_keywords": list(chunk["matched_keywords"]),
+                "best_hybrid_chunk": chunk,
+                "best_semantic_chunk": chunk,
+                "best_keyword_chunk": (
+                    chunk if chunk["keyword_score"] > 0 else None
+                    ),
                 "notice": {
                     "id": notice_id,
                     "title": chunk["title"],
@@ -111,19 +116,17 @@ def _group_chunks_by_notice(
             }
 
         result = grouped[notice_id]
-        result["hybrid_score"] = max(
-            result["hybrid_score"],
-            chunk["hybrid_score"],
-        )
+        if chunk["hybrid_score"] > result["hybrid_score"]:
+            result["hybrid_score"] = chunk["hybrid_score"]
+            result["score"] = chunk["hybrid_score"]
+            result["best_hybrid_chunk"] = chunk
         result["score"] = result["hybrid_score"]
-        result["semantic_score"] = max(
-            result["semantic_score"],
-            chunk["semantic_score"],
-        )
-        result["keyword_score"] = max(
-            result["keyword_score"],
-            chunk["keyword_score"],
-        )
+        if chunk["semantic_score"] > result["semantic_score"]:
+            result["semantic_score"] = chunk["semantic_score"]
+            result["best_semantic_chunk"] = chunk
+        if chunk["keyword_score"] > result["keyword_score"]:
+            result["keyword_score"] = chunk["keyword_score"]
+            result["best_keyword_chunk"] = chunk
 
         for keyword in chunk["matched_keywords"]:
             if keyword not in result["matched_keywords"]:
