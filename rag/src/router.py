@@ -108,7 +108,7 @@ more_notice_search를 선택하고 이전 검색 질문을 검색 기준으로 �
 - 현재 시각: {current_datetime.isoformat()}
 - 시간대: Asia/Seoul
 
-[최근 대화]
+[대화 컨텍스트]
 {router_context if router_context else "없음"}
 
 [사용자 질문]

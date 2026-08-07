@@ -80,7 +80,7 @@ MIN_KEYWORD_SCORE = 0.7
 MIN_SEMANTIC_SCORE = 0.8
 
 # 의미 점수 차이가 이 값보다 큰 공지는 제외
-MAX_SEMANTIC_SCORE_GAP = 0.023
+MAX_SEMANTIC_SCORE_GAP = 0.025
 
 # 구체적인 질문은 전체 핵심어 중 절반 이상이 실제 공지에 등장해야 함
 MIN_SPECIFIC_QUERY_KEYWORDS = 3
@@ -702,20 +702,6 @@ def main() -> None:
             )
             continue
         
-        print("\n[필터링 전 검색 결과]")
-        
-        for index, result in enumerate(search_results, start=1):
-            notice = result["notice"]
-            best_semantic_chunk = result.get("best_semantic_chunk") or {}
-            best_keyword_chunk = result.get("best_keyword_chunk") or {}
-            
-            print(
-                f"{index}. {notice.get('title')}\n"
-                f"   hybrid={result['hybrid_score']:.4f}, "
-                f"semantic={result['semantic_score']:.4f}, "
-                f"keyword={result['keyword_score']:.4f}, "
-                f"matched={result.get('matched_keywords', [])}\n"
-                )
 
         relevant_results = get_relevant_notices(
             results=search_results,
@@ -724,17 +710,6 @@ def main() -> None:
             ),
         )
         
-        print("\n[필터링 후 검색 결과]")
-        
-        for index, result in enumerate(relevant_results, start=1):
-            print(
-                f"{index}. {result['notice'].get('title')}\n"
-                f"   hybrid={result['hybrid_score']:.4f}, "
-                f"semantic={result['semantic_score']:.4f}, "
-                f"keyword={result['keyword_score']:.4f}, "
-                f"matched={result.get('matched_keywords', [])}"
-                )
-
         if not relevant_results:
             if resolution.intent == QueryIntent.MORE_RESULTS:
                 print_and_record_answer(
