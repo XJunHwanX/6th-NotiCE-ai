@@ -10,22 +10,25 @@ GitHub Actions로 주기적 실행 (예: 6시간마다)
    b. 분류 모델로 제목 기반 카테고리 예측 (threshold 0.6, 복수 카테고리 가능)
    c. notices 테이블에 insert (category는 배열)
 4. 방금 추가된 공지의 카테고리를 구독한 사용자들에게 웹 푸시 발송
-   (subscriptions.categories와 겹치는 구독자에게 발송)
+   (push_subscriptions.categories와 겹치는 활성 구독자에게 발송)
 
 실행: python pipeline/pipeline.py
 
 필요 환경변수(.env 또는 GitHub Secrets):
-    SUPABASE_URL, SUPABASE_KEY
+    SUPABASE_URL, SUPABASE_KEY, SUPABASE_SERVICE_ROLE_KEY
     GEMINI_API_KEY            (본문 이미지 OCR용)
-    VAPID_PRIVATE_KEY_PATH    (기본값 private_key.pem)
+    VAPID_PRIVATE_KEY         (web-push가 생성한 URL-safe base64 비밀키 권장)
+    VAPID_PRIVATE_KEY_PATH    (PEM/DER 파일을 쓸 때의 선택 설정)
     VAPID_CLAIMS_EMAIL
     MODEL_DRIVE_FOLDER_ID     (구글드라이브 모델 폴더 ID, 로컬에 모델 없을 때 다운로드용)
 """
 
+import json
 import os
 import re
 import time
 import sys
+from datetime import datetime, timezone
 from io import StringIO
 
 import requests
@@ -66,7 +69,11 @@ OCR_MAX_RETRY = 2
 OCR_DELAY = 3
 PAGE_DELAY = 1
 
-VAPID_PRIVATE_KEY_PATH = os.getenv("VAPID_PRIVATE_KEY_PATH", "private_key.pem")
+VAPID_PRIVATE_KEY = (
+    os.getenv("VAPID_PRIVATE_KEY")
+    or os.getenv("VAPID_PRIVATE_KEY_PATH")
+    or "private_key.pem"
+)
 VAPID_CLAIMS = {"sub": f"mailto:{os.getenv('VAPID_CLAIMS_EMAIL', 'admin@example.com')}"}
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -304,8 +311,23 @@ def get_existing_article_nos(article_nos):
 # ============================================
 # 4. 구독자 조회 (categories 배열 중 하나라도 겹치면)
 # ============================================
+def get_push_client():
+    """푸시 구독 정보는 service-role 클라이언트로만 읽습니다."""
+    if not supabase_service:
+        raise RuntimeError(
+            "SUPABASE_SERVICE_ROLE_KEY가 없어 푸시 구독자를 조회할 수 없습니다."
+        )
+    return supabase_service
+
+
 def get_subscribers_for_categories(categories):
-    result = supabase.table("subscriptions").select("*").execute()
+    result = (
+        get_push_client()
+        .table("push_subscriptions")
+        .select("*")
+        .eq("enabled", True)
+        .execute()
+    )
     matched = []
     for sub in result.data:
         sub_categories = sub.get("categories") or []
@@ -314,12 +336,50 @@ def get_subscribers_for_categories(categories):
     return matched
 
 
+def deactivate_push_subscription(subscription_id):
+    if not subscription_id:
+        return
+
+    get_push_client().table("push_subscriptions").update({
+        "enabled": False,
+    }).eq("id", subscription_id).execute()
+
+
+def save_delivery_result(notice_id, subscription_id, status, error=None):
+    """중복 방지와 운영 확인을 위해 구독별 발송 결과를 기록합니다."""
+    if not notice_id or not subscription_id:
+        return
+
+    values = {
+        "notice_id": notice_id,
+        "subscription_id": subscription_id,
+        "status": status,
+        "attempt_count": 1,
+        "last_error": (str(error)[:2000] if error else None),
+        "sent_at": (
+            datetime.now(timezone.utc).isoformat()
+            if status == "sent"
+            else None
+        ),
+    }
+    (
+        get_push_client()
+        .table("notification_deliveries")
+        .upsert(values, on_conflict="notice_id,subscription_id")
+        .execute()
+    )
+
+
 # ============================================
 # 5. 웹 푸시 발송
 # ============================================
 def send_push_notification(subscription, title, url):
-    if not subscription.get("endpoint"):
-        return False  # 아직 웹푸시 구독 정보가 없는 레코드는 건너뜀
+    required_fields = ("endpoint", "p256dh", "auth")
+    missing_fields = [
+        field for field in required_fields if not subscription.get(field)
+    ]
+    if missing_fields:
+        return False, f"구독 필드 누락: {', '.join(missing_fields)}"
 
     subscription_info = {
         "endpoint": subscription["endpoint"],
@@ -331,14 +391,32 @@ def send_push_notification(subscription, title, url):
     try:
         webpush(
             subscription_info=subscription_info,
-            data=f'{{"title": "새 공지", "body": "{title}", "url": "{url}"}}',
-            vapid_private_key=VAPID_PRIVATE_KEY_PATH,
+            data=json.dumps(
+                {
+                    "title": "새 공지",
+                    "body": title,
+                    "url": url,
+                },
+                ensure_ascii=False,
+            ),
+            vapid_private_key=VAPID_PRIVATE_KEY,
             vapid_claims=VAPID_CLAIMS,
         )
-        return True
+        return True, None
     except WebPushException as e:
         print(f"  [푸시 실패] {e}")
-        return False
+        response = getattr(e, "response", None)
+        status_code = getattr(response, "status_code", None)
+        if status_code in {404, 410}:
+            try:
+                deactivate_push_subscription(subscription.get("id"))
+                print("  [구독 비활성화] 만료된 브라우저 구독입니다.")
+            except Exception as deactivate_error:
+                print(f"  [경고] 만료 구독 비활성화 실패: {deactivate_error}")
+        return False, str(e)
+    except Exception as e:
+        print(f"  [푸시 실패] {e}")
+        return False, str(e)
 
 
 # ============================================
@@ -413,12 +491,30 @@ def main():
         elif not supabase_service:
             print("   [건너뜀] SUPABASE_SERVICE_ROLE_KEY가 없어 청크 생성을 건너뜁니다.")
 
-        subscribers = get_subscribers_for_categories(categories)
+        try:
+            subscribers = get_subscribers_for_categories(categories)
+        except Exception as e:
+            print(f"   [경고] 구독자 조회 실패: {e}")
+            subscribers = []
         print(f"   구독자 {len(subscribers)}명에게 알림 발송 시도...")
         sent_count = 0
         for sub in subscribers:
-            if send_push_notification(sub, notice["title"], notice["url"]):
+            sent, push_error = send_push_notification(
+                sub,
+                notice["title"],
+                notice["url"],
+            )
+            if sent:
                 sent_count += 1
+            try:
+                save_delivery_result(
+                    notice_id=(inserted_notice or {}).get("id"),
+                    subscription_id=sub.get("id"),
+                    status="sent" if sent else "failed",
+                    error=push_error,
+                )
+            except Exception as delivery_error:
+                print(f"   [경고] 발송 이력 저장 실패: {delivery_error}")
         print(f"   {sent_count}건 발송 완료")
 
         time.sleep(PAGE_DELAY)

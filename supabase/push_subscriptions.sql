@@ -1,0 +1,199 @@
+-- NotiCE 익명 웹 푸시 구독 스키마
+-- Supabase SQL Editor에서 한 번 실행합니다.
+
+create extension if not exists pgcrypto;
+
+create table if not exists public.push_subscriptions (
+    id uuid primary key default gen_random_uuid(),
+    endpoint text not null unique,
+    p256dh text not null,
+    auth text not null,
+    categories text[] not null default '{}'::text[],
+    management_token_hash text,
+    enabled boolean not null default true,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint push_subscriptions_categories_allowed check (
+        categories <@ array[
+            '학사',
+            '졸업',
+            '대학원/연구',
+            '학생활동',
+            '장학/근로',
+            '대회/공모전',
+            '취업/인턴',
+            '기타'
+        ]::text[]
+        and cardinality(categories) <= 8
+    )
+);
+
+-- 이전 버전의 API 전용 스키마를 이미 설치한 경우에도 anon 직접 저장이
+-- 가능하도록 관리 토큰 컬럼을 선택값으로 바꿉니다.
+alter table public.push_subscriptions
+    alter column management_token_hash drop not null;
+
+create index if not exists push_subscriptions_categories_idx
+    on public.push_subscriptions using gin (categories);
+
+create index if not exists push_subscriptions_enabled_idx
+    on public.push_subscriptions (enabled)
+    where enabled = true;
+
+create or replace function public.set_push_subscription_updated_at()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+    new.updated_at = now();
+    return new;
+end;
+$$;
+
+drop trigger if exists set_push_subscription_updated_at
+    on public.push_subscriptions;
+
+create trigger set_push_subscription_updated_at
+before update on public.push_subscriptions
+for each row
+execute function public.set_push_subscription_updated_at();
+
+create or replace function public.normalize_push_subscription_categories()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+declare
+    input_category text;
+    mapped_category text;
+    normalized_categories text[] := '{}'::text[];
+begin
+    foreach input_category in array coalesce(new.categories, '{}'::text[])
+    loop
+        mapped_category := case input_category
+            when 'academic' then '학사'
+            when 'graduation' then '졸업'
+            when 'research' then '대학원/연구'
+            when 'activity' then '학생활동'
+            when 'scholarship' then '장학/근로'
+            when 'contest' then '대회/공모전'
+            when 'career' then '취업/인턴'
+            when 'etc' then '기타'
+            when '학사' then '학사'
+            when '졸업' then '졸업'
+            when '대학원/연구' then '대학원/연구'
+            when '학생활동' then '학생활동'
+            when '장학/근로' then '장학/근로'
+            when '대회/공모전' then '대회/공모전'
+            when '취업/인턴' then '취업/인턴'
+            when '기타' then '기타'
+            else null
+        end;
+
+        if mapped_category is null then
+            raise exception '지원하지 않는 푸시 카테고리: %', input_category
+                using errcode = '23514';
+        end if;
+
+        if not (mapped_category = any(normalized_categories)) then
+            normalized_categories := array_append(
+                normalized_categories,
+                mapped_category
+            );
+        end if;
+    end loop;
+
+    new.categories := normalized_categories;
+    if cardinality(normalized_categories) = 0 then
+        new.enabled := false;
+    end if;
+    return new;
+end;
+$$;
+
+drop trigger if exists normalize_push_subscription_categories
+    on public.push_subscriptions;
+
+create trigger normalize_push_subscription_categories
+before insert or update of categories on public.push_subscriptions
+for each row
+execute function public.normalize_push_subscription_categories();
+
+alter table public.push_subscriptions enable row level security;
+
+revoke all on table public.push_subscriptions from anon, authenticated;
+grant select, insert, update on table public.push_subscriptions to anon;
+grant all on table public.push_subscriptions to service_role;
+
+drop policy if exists "anon_select_push_subscriptions"
+    on public.push_subscriptions;
+drop policy if exists "anon_insert_push_subscriptions"
+    on public.push_subscriptions;
+drop policy if exists "anon_update_push_subscriptions"
+    on public.push_subscriptions;
+
+-- 로그인 없는 브라우저가 endpoint 기준 upsert를 수행하려면 UPDATE와 함께
+-- SELECT 정책도 필요합니다. 모든 anon 요청은 같은 역할이므로 이 정책은
+-- 브라우저별 소유권을 구분하지 못한다는 한계가 있습니다.
+create policy "anon_select_push_subscriptions"
+on public.push_subscriptions
+for select
+to anon
+using (true);
+
+create policy "anon_insert_push_subscriptions"
+on public.push_subscriptions
+for insert
+to anon
+with check (
+    endpoint like 'https://%'
+    and length(p256dh) between 16 and 512
+    and length(auth) between 8 and 512
+    and cardinality(categories) <= 8
+);
+
+create policy "anon_update_push_subscriptions"
+on public.push_subscriptions
+for update
+to anon
+using (true)
+with check (
+    endpoint like 'https://%'
+    and length(p256dh) between 16 and 512
+    and length(auth) between 8 and 512
+    and cardinality(categories) <= 8
+);
+
+create table if not exists public.notification_deliveries (
+    id bigint generated by default as identity primary key,
+    notice_id bigint not null references public.notices(id) on delete cascade,
+    subscription_id uuid not null
+        references public.push_subscriptions(id) on delete cascade,
+    status text not null default 'pending'
+        check (status in ('pending', 'sent', 'failed')),
+    attempt_count integer not null default 0 check (attempt_count >= 0),
+    sent_at timestamptz,
+    last_error text,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    unique (notice_id, subscription_id)
+);
+
+create index if not exists notification_deliveries_status_idx
+    on public.notification_deliveries (status, created_at);
+
+alter table public.notification_deliveries enable row level security;
+
+revoke all on table public.notification_deliveries from anon, authenticated;
+grant all on table public.notification_deliveries to service_role;
+grant usage, select on sequence public.notification_deliveries_id_seq
+    to service_role;
+
+drop trigger if exists set_notification_delivery_updated_at
+    on public.notification_deliveries;
+
+create trigger set_notification_delivery_updated_at
+before update on public.notification_deliveries
+for each row
+execute function public.set_push_subscription_updated_at();

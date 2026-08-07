@@ -49,10 +49,11 @@ jobs:
           echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY_OCR }}" >> pipeline/.env
           echo "VAPID_CLAIMS_EMAIL=${{ secrets.VAPID_CLAIMS_EMAIL }}" >> pipeline/.env
           echo "VAPID_PRIVATE_KEY_PATH=pipeline/private_key.pem" >> pipeline/.env
-          
+
       - name: Create VAPID private key file
-        run: |
-          echo "${{ secrets.VAPID_PRIVATE_KEY }}" > pipeline/private_key.pem
+        env:
+          VAPID_PRIVATE_KEY_PEM: ${{ secrets.VAPID_PRIVATE_KEY }}
+        run: printf '%s\n' "$VAPID_PRIVATE_KEY_PEM" > pipeline/private_key.pem
       
       - name: Run pipeline
         run: python pipeline/pipeline.py

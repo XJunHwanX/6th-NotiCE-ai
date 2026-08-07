@@ -15,6 +15,7 @@ cryptography==49.0.0
 deprecation==2.1.0
 distro==1.9.0
 filelock==3.31.2
+fastapi==0.116.1
 frozenlist==1.8.0
 fsspec==2026.6.0
 gdown==6.1.0
@@ -103,6 +104,7 @@ typing_extensions==4.15.0
 tzdata==2026.2
 uritemplate==4.2.0
 urllib3==2.7.0
+uvicorn==0.35.0
 webencodings==0.5.1
 websockets==15.0.1
 yarl==1.24.2

@@ -207,3 +207,40 @@ def search_notice_chunks(
     )
 
     return _group_chunks_by_notice(chunks, top_k=top_k)
+
+
+def search_notice_chunks_keyword_only(
+    question: str,
+    repository: ChunkRepository,
+    top_k: int = 5,
+    category_filter: str | None = None,
+    deadline_from: str | None = None,
+    exclude_notice_ids: tuple | list | set | None = None,
+    preprocessor: QueryPreprocessor = DEFAULT_PREPROCESSOR,
+) -> list[dict]:
+    """임베딩 모델 없이 Supabase 키워드 RPC만으로 공지를 검색합니다."""
+    keywords = preprocessor.extract_keywords(question)
+    if not keywords:
+        return []
+
+    match_count = max(top_k * 4, top_k)
+    keyword_rows = repository.search_notice_chunks_keyword(
+        search_keywords=keywords,
+        match_count=match_count,
+        category_filter=category_filter,
+        deadline_from=deadline_from,
+        exclude_notice_ids=exclude_notice_ids,
+    )
+
+    chunks = []
+    for row in keyword_rows:
+        keyword_score = float(row["keyword_score"])
+        chunks.append({
+            **row,
+            "semantic_score": 0.0,
+            "keyword_score": keyword_score,
+            "hybrid_score": keyword_score,
+            "matched_keywords": list(row.get("matched_keywords", [])),
+        })
+
+    return _group_chunks_by_notice(chunks, top_k=top_k)

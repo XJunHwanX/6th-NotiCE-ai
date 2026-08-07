@@ -83,6 +83,26 @@ def append_source_section(answer: str, results: list[dict]) -> str:
     return f"{answer.strip()}{create_source_section(results)}"
 
 
+def _friendly_llm_error(error: Exception) -> str:
+    """LLM 호출 실패를 사용자용 안내 문구로 바꿉니다.
+
+    Gemini 사용량(무료 쿼터)을 다 쓴 429/RESOURCE_EXHAUSTED 상황에서 원문 에러
+    (JSON 덤프) 대신 안내를 보여줍니다.
+    """
+    text = str(error)
+    is_quota = (
+        getattr(error, "code", None) == 429
+        or "RESOURCE_EXHAUSTED" in text
+        or "quota" in text.lower()
+    )
+    if is_quota:
+        return (
+            "지금은 챗봇 사용량이 많아 답변을 드릴 수 없어요. "
+            "잠시 후 다시 질문해 주세요. 🙏"
+        )
+    return "답변을 생성하는 중 문제가 발생했어요. 잠시 후 다시 질문해 주세요."
+
+
 def generate_general_answer(
     question: str,
     now: datetime | None = None,
@@ -105,7 +125,7 @@ def generate_general_answer(
             contents=prompt,
         )
     except Exception as error:
-        return f"답변 생성 중 오류가 발생했습니다: {error}"
+        return _friendly_llm_error(error)
 
     if not response.text:
         return "안녕하세요. 찾고 싶은 공지 내용을 말씀해주세요."
@@ -169,7 +189,7 @@ def generate_answer(
             contents=prompt,
         )
     except Exception as error:
-        return f"답변 생성 중 오류가 발생했습니다: {error}"
+        return _friendly_llm_error(error)
 
     if not response.text:
         return "답변을 생성하지 못했습니다."

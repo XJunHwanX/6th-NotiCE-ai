@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: notice-api-hongik
+    runtime: python
+    plan: free
+    region: singapore
+    branch: backend-api
+    buildCommand: pip install --upgrade pip && pip install -r backend/requirements-render.txt
+    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: RAG_RETRIEVAL_MODE
+        value: keyword
+      - key: RAG_SEARCH_SOURCE
+        value: chunks
+      - key: NOTICE_SOURCE
+        value: supabase
+      - key: CORS_ORIGINS
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false

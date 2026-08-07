@@ -1,0 +1,1 @@
+"""NotiCE backend package."""
