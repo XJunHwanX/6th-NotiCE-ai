@@ -141,3 +141,55 @@ export async function subscribeToPush(
     };
   }
 }
+
+export type DisableResult =
+  | { ok: true }
+  | { ok: false; reason: "unsupported" | "error"; message: string };
+
+/**
+ * 알림 "발송만 중단"합니다. 브라우저 구독(PushSubscription)은 그대로 두고
+ * Supabase의 enabled 플래그만 false로 내려 발송 대상에서 제외합니다.
+ * 다시 켜면 subscribeToPush로 복구됩니다.
+ */
+export async function disablePush(): Promise<DisableResult> {
+  if (!isPushSupported()) {
+    return {
+      ok: false,
+      reason: "unsupported",
+      message: "이 브라우저는 웹 푸시를 지원하지 않아요.",
+    };
+  }
+
+  // Supabase 미설정(더미) 환경에서는 저장할 곳이 없으므로 로컬 상태만 유지.
+  if (!isSupabaseConfigured()) return { ok: true };
+
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    const subscription = registration
+      ? await registration.pushManager.getSubscription()
+      : null;
+
+    // 구독이 없으면 끌 것도 없음.
+    if (!subscription) return { ok: true };
+
+    const { error } = await getSupabase()
+      .from("push_subscriptions")
+      .update({ enabled: false })
+      .eq("endpoint", subscription.endpoint);
+
+    if (error) {
+      return {
+        ok: false,
+        reason: "error",
+        message: `알림 끄기에 실패했어요: ${error.message}`,
+      };
+    }
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: "error",
+      message: (err as Error)?.message || "알림 끄기 중 오류가 발생했어요.",
+    };
+  }
+}

@@ -8,11 +8,14 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { CategoryTag } from "@/components/category-tag";
 import { TabBar } from "@/components/tab-bar";
-import { IosInstallHint } from "@/components/ios-install-hint";
+import { NotificationHelp } from "@/components/notification-help";
+import { cn } from "@/lib/utils";
 import { CATEGORIES, type CategoryId } from "@/lib/categories";
-import { isPushSupported, subscribeToPush } from "@/lib/push";
+import { disablePush, isPushSupported, subscribeToPush } from "@/lib/push";
 import {
+  getPushEnabledPref,
   getSubscribedCategories,
+  setPushEnabledPref,
   setSubscribedCategories,
 } from "@/lib/subscription-store";
 
@@ -29,11 +32,18 @@ export default function SettingsPage() {
     type: "ok" | "error";
     text: string;
   } | null>(null);
+  // 알림 받기 마스터 on/off (끄면 발송만 중단, 구독은 유지)
+  const [pushOn, setPushOn] = React.useState(false);
 
   // localStorage / Notification 은 클라이언트에서만 접근 → 마운트 후 로드
   React.useEffect(() => {
-    setSelected(new Set(getSubscribedCategories()));
-    setPermission(isPushSupported() ? Notification.permission : "unsupported");
+    const cats = getSubscribedCategories();
+    const perm = isPushSupported() ? Notification.permission : "unsupported";
+    setSelected(new Set(cats));
+    setPermission(perm);
+    // 저장된 on/off 값이 없으면 이미 구독한 상태(권한 허용 + 카테고리 있음)로 추정
+    const pref = getPushEnabledPref();
+    setPushOn(pref ?? (perm === "granted" && cats.length > 0));
     setMounted(true);
   }, []);
 
@@ -50,6 +60,17 @@ export default function SettingsPage() {
   const handleSave = async () => {
     setSaving(true);
     setSubscribedCategories([...selected]);
+
+    // 알림이 꺼진 상태면 카테고리만 로컬에 저장하고 발송은 중단 유지.
+    if (!pushOn) {
+      setSaving(false);
+      setFeedback({
+        type: "ok",
+        text: "카테고리를 저장했어요 (알림은 꺼져 있어요)",
+      });
+      return;
+    }
+
     // 권한 요청 + 구독을 Supabase에 저장. 이미 허용된 경우 프롬프트 없이 통과.
     const result = await subscribeToPush([...selected]);
     if (isPushSupported()) setPermission(Notification.permission);
@@ -58,9 +79,14 @@ export default function SettingsPage() {
     if (result.ok) {
       setFeedback({
         type: "ok",
-        text: selected.size > 0 ? "알림 설정이 저장되었어요" : "모든 알림을 껐어요",
+        text:
+          selected.size > 0
+            ? "알림 설정이 저장되었어요"
+            : "선택한 카테고리가 없어 알림이 오지 않아요",
       });
     } else if (result.reason === "denied") {
+      setPushOn(false);
+      setPushEnabledPref(false);
       setFeedback({
         type: "error",
         text: "알림 권한이 거부되어 알림을 받을 수 없어요",
@@ -76,18 +102,51 @@ export default function SettingsPage() {
     }
   };
 
-  const enableNotifications = async () => {
-    setSubscribedCategories([...selected]);
-    const result = await subscribeToPush([...selected]);
-    if (isPushSupported()) setPermission(Notification.permission);
-    if (result.ok) {
-      setFeedback({ type: "ok", text: "알림을 켰어요" });
-    } else if (result.reason === "denied") {
-      setFeedback({ type: "error", text: "알림 권한이 거부되었어요" });
-    } else if (
-      result.reason !== "unsupported" &&
-      result.reason !== "not-configured"
-    ) {
+  // 마스터 "알림 받기" 스위치
+  const toggleMaster = async (next: boolean) => {
+    setFeedback(null);
+    setSaving(true);
+
+    if (next) {
+      setSubscribedCategories([...selected]);
+      const result = await subscribeToPush([...selected]);
+      if (isPushSupported()) setPermission(Notification.permission);
+      setSaving(false);
+
+      if (result.ok) {
+        setPushOn(true);
+        setPushEnabledPref(true);
+        setFeedback({ type: "ok", text: "알림을 켰어요" });
+      } else if (result.reason === "denied") {
+        setPushOn(false);
+        setPushEnabledPref(false);
+        setFeedback({
+          type: "error",
+          text: "알림 권한이 거부되어 켤 수 없어요",
+        });
+      } else if (
+        result.reason === "unsupported" ||
+        result.reason === "not-configured"
+      ) {
+        setPushOn(true);
+        setPushEnabledPref(true);
+        setFeedback({ type: "ok", text: "설정을 저장했어요" });
+      } else {
+        setPushOn(false);
+        setPushEnabledPref(false);
+        setFeedback({ type: "error", text: result.message });
+      }
+      return;
+    }
+
+    // 끄기: 구독은 두고 발송만 중단
+    setPushOn(false);
+    setPushEnabledPref(false);
+    const result = await disablePush();
+    setSaving(false);
+    if (result.ok || result.reason === "unsupported") {
+      setFeedback({ type: "ok", text: "알림을 껐어요" });
+    } else {
       setFeedback({ type: "error", text: result.message });
     }
   };
@@ -110,30 +169,78 @@ export default function SettingsPage() {
       </header>
 
       <main className="flex-1 px-5 py-5">
-        {/* iOS 사용자에게 홈 화면 추가(PWA 설치) 안내 */}
-        <IosInstallHint />
+        {/* 접고 펴는 플랫폼별 알림 안내 (iOS/안드로이드/데스크톱) */}
+        <NotificationHelp />
 
-        {/* Permission banner */}
-        <PermissionBanner
-          permission={mounted ? permission : null}
-          onEnable={enableNotifications}
-        />
+        {/* 권한이 차단됐거나 미지원일 때만 안내 */}
+        {mounted &&
+          (permission === "denied" || permission === "unsupported") && (
+            <div className="mb-4">
+              <PermissionBanner permission={permission} />
+            </div>
+          )}
+
+        {/* 알림 받기 마스터 스위치 */}
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
+          <span className="flex items-center gap-3">
+            <span
+              className={cn(
+                "flex h-9 w-9 items-center justify-center rounded-lg",
+                pushOn
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground"
+              )}
+            >
+              {pushOn ? (
+                <BellRing className="h-[18px] w-[18px]" />
+              ) : (
+                <BellOff className="h-[18px] w-[18px]" />
+              )}
+            </span>
+            <span>
+              <span className="block text-sm font-semibold text-foreground">
+                알림 받기
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                {pushOn ? "새 공지 알림을 받고 있어요" : "알림이 꺼져 있어요"}
+              </span>
+            </span>
+          </span>
+          <Switch
+            checked={pushOn}
+            onCheckedChange={toggleMaster}
+            disabled={saving || permission === "unsupported"}
+            aria-label="알림 받기"
+          />
+        </div>
 
         {/* Category toggles */}
         <h2 className="mb-1 mt-7 px-1 text-sm font-bold text-foreground">
           알림 받을 카테고리
         </h2>
         <p className="mb-3 px-1 text-xs text-muted-foreground">
-          켜둔 카테고리의 새 공지만 알림으로 받아요.
+          {pushOn
+            ? "켜둔 카테고리의 새 공지만 알림으로 받아요."
+            : "알림을 켜면 카테고리별로 받을 수 있어요."}
         </p>
 
-        <div className="divide-y divide-border overflow-hidden rounded-xl border border-border">
+        <div
+          className={cn(
+            "divide-y divide-border overflow-hidden rounded-xl border border-border transition-opacity",
+            !pushOn && "opacity-50"
+          )}
+        >
           {CATEGORIES.map((cat) => {
             const on = selected.has(cat.id);
             return (
               <label
                 key={cat.id}
-                className="flex cursor-pointer items-center justify-between gap-3 px-4 py-3.5 transition-colors hover:bg-muted/50"
+                className={cn(
+                  "flex items-center justify-between gap-3 px-4 py-3.5 transition-colors",
+                  pushOn
+                    ? "cursor-pointer hover:bg-muted/50"
+                    : "cursor-default"
+                )}
               >
                 <span className="flex items-center gap-2.5">
                   <CategoryTag category={cat.id} />
@@ -144,6 +251,7 @@ export default function SettingsPage() {
                 <Switch
                   checked={on}
                   onCheckedChange={() => toggle(cat.id)}
+                  disabled={!pushOn}
                   aria-label={`${cat.label} 알림`}
                 />
               </label>
@@ -201,7 +309,7 @@ function PermissionBanner({
   onEnable,
 }: {
   permission: PermissionState | null;
-  onEnable: () => void;
+  onEnable?: () => void;
 }) {
   // 마운트 전(권한 미확정): 레이아웃 유지를 위한 플레이스홀더
   if (permission === null) {

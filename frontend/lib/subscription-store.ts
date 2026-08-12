@@ -61,3 +61,29 @@ export function markOnboarded(): void {
     // 조용히 무시
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* 알림 받기 마스터 on/off (발송 중단은 구독을 유지한 채 enabled만 내림)    */
+/* ------------------------------------------------------------------ */
+
+const PUSH_ENABLED_KEY = "notice:push-enabled";
+
+/** 저장된 알림 on/off 선호값. 한 번도 설정한 적 없으면 null. */
+export function getPushEnabledPref(): boolean | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(PUSH_ENABLED_KEY);
+    return raw === null ? null : raw === "1";
+  } catch {
+    return null;
+  }
+}
+
+export function setPushEnabledPref(enabled: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PUSH_ENABLED_KEY, enabled ? "1" : "0");
+  } catch {
+    // 조용히 무시
+  }
+}
