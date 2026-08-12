@@ -185,8 +185,12 @@ class ConversationState:
                 else None
             ),
             "pending_answer_question": self.pending_answer_question,
+            "router_context": [
+                {"role": message["role"], "content": message["content"]}
+                for message in self.router_context
+            ],
         }
-        
+
     def add_message(self, role: str, content: str) -> None:
         self.router_context.append(
         {

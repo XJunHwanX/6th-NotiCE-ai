@@ -237,9 +237,9 @@ class ChatbotService:
         else:
             plan = plan_question(
                 question=processed_query.normalized,
-                has_context=conversation.has_context,
-                has_active_notice=conversation.active_result is not None,
+                router_context=conversation.build_router_context(),
             )
+            conversation.add_message("user", processed_query.normalized)
             query_route = plan.route
 
             if plan.route == QueryRoute.SELECTED_NOTICE_ANSWER:
@@ -407,6 +407,7 @@ class ChatbotService:
             )[:MAX_RESULT_CHOICES],
             shown_notice_ids=list(snapshot.get("shown_notice_ids") or [])[:20],
             pending_answer_question=snapshot.get("pending_answer_question"),
+            router_context=list(snapshot.get("router_context") or [])[-6:],
         )
 
         candidate_ids = list(snapshot.get("candidate_notice_ids") or [])[
@@ -456,6 +457,7 @@ class ChatbotService:
         conversation: ConversationState,
         results: list[dict] | None = None,
     ) -> ChatResult:
+        conversation.add_message("assistant", answer[:400])
         return ChatResult(
             answer=answer,
             state=conversation.snapshot(),

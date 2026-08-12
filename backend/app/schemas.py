@@ -69,6 +69,10 @@ class ChatStatePayload(BaseModel):
     )
     active_notice_id: int | str | None = None
     pending_answer_question: str | None = Field(default=None, max_length=1000)
+    router_context: list[dict[str, str]] = Field(
+        default_factory=list,
+        max_length=6,
+    )
 
 
 class ChatRequest(BaseModel):
