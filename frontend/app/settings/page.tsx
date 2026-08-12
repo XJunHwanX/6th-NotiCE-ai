@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { CategoryTag } from "@/components/category-tag";
 import { TabBar } from "@/components/tab-bar";
+import { IosInstallHint } from "@/components/ios-install-hint";
 import { CATEGORIES, type CategoryId } from "@/lib/categories";
 import { isPushSupported, subscribeToPush } from "@/lib/push";
 import {
@@ -109,6 +110,9 @@ export default function SettingsPage() {
       </header>
 
       <main className="flex-1 px-5 py-5">
+        {/* iOS 사용자에게 홈 화면 추가(PWA 설치) 안내 */}
+        <IosInstallHint />
+
         {/* Permission banner */}
         <PermissionBanner
           permission={mounted ? permission : null}
