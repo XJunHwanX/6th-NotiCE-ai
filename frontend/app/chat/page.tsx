@@ -37,6 +37,8 @@ export default function ChatPage() {
   const [chatState, setChatState] = React.useState<ChatState>(null);
   const [input, setInput] = React.useState("");
   const [loading, setLoading] = React.useState(false);
+  // 입력창 포커스(모바일 키보드 등장) 시 하단 고정 탭바를 숨겨 레이아웃이 깨지지 않게 함
+  const [inputFocused, setInputFocused] = React.useState(false);
 
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const taRef = React.useRef<HTMLTextAreaElement>(null);
@@ -176,8 +178,10 @@ export default function ChatPage() {
             value={input}
             onChange={onInputChange}
             onKeyDown={onKeyDown}
+            onFocus={() => setInputFocused(true)}
+            onBlur={() => setInputFocused(false)}
             placeholder="공지에 대해 물어보세요…"
-            className="max-h-[120px] flex-1 resize-none rounded-2xl border border-input bg-muted px-4 py-2.5 text-sm leading-relaxed text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="max-h-[120px] flex-1 resize-none rounded-2xl border border-input bg-muted px-4 py-2.5 text-base leading-relaxed text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
           <button
             type="submit"
@@ -193,9 +197,13 @@ export default function ChatPage() {
         </p>
       </div>
 
-      {/* 하단 고정 TabBar 자리 확보 */}
-      <div className="h-[58px] shrink-0" aria-hidden />
-      <TabBar active="chat" />
+      {/* 하단 고정 TabBar 자리 확보 — 입력 포커스(키보드) 시엔 숨겨 겹침/잘림 방지 */}
+      {!inputFocused && (
+        <>
+          <div className="h-[58px] shrink-0" aria-hidden />
+          <TabBar active="chat" />
+        </>
+      )}
     </div>
   );
 }

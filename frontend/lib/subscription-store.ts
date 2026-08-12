@@ -33,3 +33,31 @@ export function setSubscribedCategories(categories: string[]): void {
     // localStorage 사용 불가 환경(사생활 모드 등)에서는 조용히 무시
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* 첫 방문(온보딩 완료) 여부                                            */
+/* ------------------------------------------------------------------ */
+
+const ONBOARDED_KEY = "notice:onboarded";
+
+/**
+ * 온보딩을 마친 적이 있는지. localStorage를 못 쓰는 환경(사생활 모드 등)에서는
+ * 온보딩을 반복해서 띄우지 않도록 true(=통과)로 간주합니다.
+ */
+export function hasOnboarded(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    return window.localStorage.getItem(ONBOARDED_KEY) === "1";
+  } catch {
+    return true;
+  }
+}
+
+export function markOnboarded(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(ONBOARDED_KEY, "1");
+  } catch {
+    // 조용히 무시
+  }
+}

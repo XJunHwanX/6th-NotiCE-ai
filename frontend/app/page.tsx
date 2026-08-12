@@ -2,6 +2,7 @@ import { AlertCircle } from "lucide-react";
 
 import { getNotices } from "@/lib/notices";
 import { HomeClient } from "@/components/home-client";
+import { OnboardingGate } from "@/components/onboarding-gate";
 
 // Notices change over time; always fetch fresh on the server.
 export const dynamic = "force-dynamic";
@@ -14,7 +15,12 @@ export default async function HomePage() {
     return <LoadError message={(err as Error).message} />;
   }
 
-  return <HomeClient notices={notices} />;
+  return (
+    <>
+      <OnboardingGate />
+      <HomeClient notices={notices} />
+    </>
+  );
 }
 
 function LoadError({ message }: { message: string }) {

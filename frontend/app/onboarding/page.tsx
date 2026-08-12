@@ -31,7 +31,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { subscribeToPush } from "@/lib/push";
-import { setSubscribedCategories } from "@/lib/subscription-store";
+import {
+  markOnboarded,
+  setSubscribedCategories,
+} from "@/lib/subscription-store";
 
 /* ------------------------------------------------------------------ */
 /* Data                                                                */
@@ -101,6 +104,7 @@ export default function OnboardingPage() {
   const requestPermission = async () => {
     // 고른 카테고리를 로컬에 저장 (설정 화면에서 다시 불러와 편집 가능)
     setSubscribedCategories([...selected]);
+    markOnboarded();
     const result = await subscribeToPush([...selected]);
     if (result.ok) {
       setPermission("granted");
@@ -117,6 +121,7 @@ export default function OnboardingPage() {
 
   const skipPermission = () => {
     setSubscribedCategories([...selected]);
+    markOnboarded();
     setPermission(null);
     setDone(true);
   };
