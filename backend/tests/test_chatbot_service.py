@@ -119,7 +119,7 @@ class ChatbotServiceTests(unittest.TestCase):
         self.assertIn("현재 검색 결과에 없는 공지", result.answer)
         self.assertIsNone(result.state["active_notice_id"])
 
-    def test_more_results_pages_cached_candidates_without_search(self):
+    def test_candidate_page_uses_only_requested_three_without_search(self):
         state = {
             "last_search_query": "장학금 공지",
             "shown_notice_ids": [10, 2, 3],
@@ -127,18 +127,21 @@ class ChatbotServiceTests(unittest.TestCase):
         }
 
         with patch.object(self.service, "_search") as search:
-            result = self.service.handle_message("", state, load_more=True)
+            result = self.service.handle_message("", state, candidate_page=2)
 
         search.assert_not_called()
         self.assertEqual(
             [source["id"] for source in result.sources],
-            [10, 2, 3, 4, 5],
+            [4, 5],
         )
-        self.assertEqual(result.state["shown_notice_ids"], [10, 2, 3, 4, 5])
+        self.assertEqual(result.state["shown_notice_ids"], [4, 5])
+        self.assertEqual(result.state["candidate_page"], 2)
         self.assertTrue(result.selection_required)
         self.assertFalse(result.has_more)
+        self.assertEqual(result.page, 2)
+        self.assertEqual(result.page_count, 2)
 
-    def test_more_results_keeps_last_page_when_already_exhausted(self):
+    def test_candidate_page_clamps_to_last_page(self):
         state = {
             "last_search_query": "장학금 공지",
             "shown_notice_ids": [10, 2, 3, 4, 5],
@@ -146,12 +149,12 @@ class ChatbotServiceTests(unittest.TestCase):
         }
 
         with patch.object(self.service, "_search") as search:
-            result = self.service.handle_message("", state, load_more=True)
+            result = self.service.handle_message("", state, candidate_page=99)
 
         search.assert_not_called()
         self.assertEqual(
             [source["id"] for source in result.sources],
-            [10, 2, 3, 4, 5],
+            [4, 5],
         )
         self.assertTrue(result.selection_required)
         self.assertFalse(result.has_more)

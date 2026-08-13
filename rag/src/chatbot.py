@@ -132,6 +132,8 @@ class ChatResult:
     sources: list[dict]
     selection_required: bool = False
     has_more: bool = False
+    page: int = 1
+    page_count: int = 1
 
 
 class ChatbotService:
@@ -233,9 +235,15 @@ class ChatbotService:
         state_snapshot: dict | None = None,
         selected_notice_id: int | str | None = None,
         load_more: bool = False,
+        candidate_page: int | None = None,
     ) -> ChatResult:
         question = message.strip()
-        if not question and selected_notice_id is None and not load_more:
+        if (
+            not question
+            and selected_notice_id is None
+            and not load_more
+            and candidate_page is None
+        ):
             return self._result("질문을 입력해주세요.", ConversationState())
 
         if question in RESET_PATTERNS:
@@ -254,8 +262,14 @@ class ChatbotService:
                 self._active_notice_id(conversation),
             )
 
+        if candidate_page is not None:
+            return self._show_candidate_page(conversation, candidate_page)
+
         if load_more:
-            return self._show_next_candidate_page(conversation)
+            return self._show_candidate_page(
+                conversation,
+                conversation.candidate_page + 1,
+            )
 
         if selected_notice_id is not None:
             selected_result = conversation.select_candidate_by_id(
@@ -320,11 +334,15 @@ class ChatbotService:
                 self._create_card_selection_answer(
                     visible_results,
                     total_count=len(conversation.candidate_results),
+                    page=1,
+                    page_count=self._page_count(conversation.candidate_results),
                 ),
                 conversation,
                 visible_results,
                 selection_required=True,
                 has_more=self._has_hidden_candidates(conversation),
+                page=1,
+                page_count=self._page_count(conversation.candidate_results),
             )
 
         processed_query = self.preprocessor.process(question)
@@ -354,7 +372,10 @@ class ChatbotService:
         )
 
         if plan.route == QueryRoute.MORE_NOTICE_SEARCH:
-            return self._show_next_candidate_page(conversation)
+            return self._show_candidate_page(
+                conversation,
+                conversation.candidate_page + 1,
+            )
 
         if plan.route == QueryRoute.SELECTED_NOTICE_ANSWER:
             if conversation.active_result is None:
@@ -478,48 +499,53 @@ class ChatbotService:
             self._create_card_selection_answer(
                 displayed_results,
                 total_count=len(relevant_results),
+                page=1,
+                page_count=self._page_count(relevant_results),
             ),
             conversation,
             displayed_results,
             selection_required=True,
             has_more=has_more,
+            page=1,
+            page_count=self._page_count(relevant_results),
         )
 
-    def _show_next_candidate_page(
+    def _show_candidate_page(
         self,
         conversation: ConversationState,
+        page: int,
     ) -> ChatResult:
-        """최초 검색에서 확정한 후보를 재검색 없이 3개씩 더 공개합니다."""
+        """최초 검색 후보를 재검색 없이 3개 단위 페이지로 보여줍니다."""
         if not conversation.has_candidates:
             return self._result(
                 "먼저 궁금한 공지를 검색해주세요.",
                 conversation,
             )
 
-        visible_count = min(
-            len(conversation.shown_notice_ids) + MAX_RESULT_CHOICES,
-            len(conversation.candidate_results),
-        )
-        visible_results = conversation.candidate_results[:visible_count]
+        page_count = self._page_count(conversation.candidate_results)
+        current_page = max(1, min(page, page_count))
+        start = (current_page - 1) * MAX_RESULT_CHOICES
+        visible_results = conversation.candidate_results[
+            start : start + MAX_RESULT_CHOICES
+        ]
         visible_ids = self._notice_ids(visible_results)
+        conversation.candidate_page = current_page
         conversation.shown_notice_ids = visible_ids
         conversation.referenced_notice_ids = visible_ids
 
-        has_more = visible_count < len(conversation.candidate_results)
-        answer = (
+        return self._result(
             self._create_card_selection_answer(
                 visible_results,
                 total_count=len(conversation.candidate_results),
-            )
-            if has_more
-            else "관련 공지를 모두 보여드렸습니다. 궁금한 공지 카드를 선택해주세요."
-        )
-        return self._result(
-            answer,
+                page=current_page,
+                page_count=page_count,
+            ),
             conversation,
             visible_results,
             selection_required=True,
-            has_more=has_more,
+            has_more=current_page < page_count,
+            page=current_page,
+            page_count=page_count,
         )
 
     @staticmethod
@@ -533,6 +559,8 @@ class ChatbotService:
     def _create_card_selection_answer(
         results: list[dict],
         total_count: int | None = None,
+        page: int = 1,
+        page_count: int = 1,
     ) -> str:
         total = total_count if total_count is not None else len(results)
         count_text = (
@@ -540,9 +568,12 @@ class ChatbotService:
             if total > len(results)
             else f"관련 공지 {total}개를 찾았습니다."
         )
-        return (
-            f"{count_text} 궁금한 공지 카드를 선택해주세요."
-        )
+        page_text = f" ({page}/{page_count}페이지)" if page_count > 1 else ""
+        return f"{count_text}{page_text} 궁금한 공지 카드를 선택해주세요."
+
+    @staticmethod
+    def _page_count(results: list[dict]) -> int:
+        return max(1, (len(results) + MAX_RESULT_CHOICES - 1) // MAX_RESULT_CHOICES)
 
     @staticmethod
     def _notice_ids(results: list[dict]) -> list[Any]:
@@ -676,6 +707,7 @@ class ChatbotService:
             shown_notice_ids=list(snapshot.get("shown_notice_ids") or [])[:100],
             pending_answer_question=snapshot.get("pending_answer_question"),
             router_context=list(snapshot.get("router_context") or [])[-6:],
+            candidate_page=max(1, int(snapshot.get("candidate_page") or 1)),
         )
 
         candidate_ids = list(snapshot.get("candidate_notice_ids") or [])[:100]
@@ -724,6 +756,8 @@ class ChatbotService:
         results: list[dict] | None = None,
         selection_required: bool = False,
         has_more: bool = False,
+        page: int = 1,
+        page_count: int = 1,
     ) -> ChatResult:
         conversation.add_message("assistant", answer[:400])
         return ChatResult(
@@ -732,4 +766,6 @@ class ChatbotService:
             sources=self._sources(results),
             selection_required=selection_required,
             has_more=has_more,
+            page=page,
+            page_count=page_count,
         )

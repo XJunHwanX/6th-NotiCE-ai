@@ -33,6 +33,7 @@ class ConversationState:
     active_result: dict | None = None
     pending_answer_question: str | None = None
     router_context: list[dict[str, str]] = field(default_factory=list)
+    candidate_page: int = 1
 
     @property
     def has_context(self) -> bool:
@@ -195,6 +196,7 @@ class ConversationState:
         self.candidate_results = list(results)
         self.last_search_query = resolution.search_question
         self.shown_notice_ids = notice_ids.copy()
+        self.candidate_page = 1
 
     def snapshot(self) -> dict:
         """나중에 chat_sessions에 그대로 저장할 수 있는 상태를 반환합니다."""
@@ -213,6 +215,7 @@ class ConversationState:
                 else None
             ),
             "pending_answer_question": self.pending_answer_question,
+            "candidate_page": self.candidate_page,
             "router_context": [
                 {"role": message["role"], "content": message["content"]}
                 for message in self.router_context

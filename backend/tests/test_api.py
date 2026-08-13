@@ -17,6 +17,7 @@ class FakeChatbotService:
         state_snapshot=None,
         selected_notice_id=None,
         load_more=False,
+        candidate_page=None,
     ):
         answer = (
             f"선택: {selected_notice_id}"

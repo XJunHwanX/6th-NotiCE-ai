@@ -17,7 +17,7 @@ import { ChatMarkdown } from "@/components/chat-markdown";
 import {
   sendChat,
   selectNotice,
-  loadMoreNotices,
+  changeNoticePage,
   SUGGESTED_QUESTIONS,
   type ChatSource,
   type ChatState,
@@ -30,6 +30,8 @@ type Message = {
   sources?: ChatSource[];
   selectionRequired?: boolean;
   hasMore?: boolean;
+  page?: number;
+  pageCount?: number;
   error?: boolean;
 };
 
@@ -83,6 +85,8 @@ export default function ChatPage() {
           sources: res.sources ?? [],
           selectionRequired: res.selectionRequired,
           hasMore: res.hasMore,
+          page: res.page,
+          pageCount: res.pageCount,
         },
       ]);
     } catch (err) {
@@ -140,12 +144,12 @@ export default function ChatPage() {
     }
   };
 
-  const loadMore = async () => {
+  const changePage = async (page: number) => {
     if (loading) return;
 
     setLoading(true);
     try {
-      const res = await loadMoreNotices(chatState);
+      const res = await changeNoticePage(page, chatState);
       setChatState(res.state);
       setMessages((prev) => {
         const targetIndex = prev.findLastIndex(
@@ -161,6 +165,8 @@ export default function ChatPage() {
                 sources: res.sources ?? [],
                 selectionRequired: res.selectionRequired,
                 hasMore: res.hasMore,
+                page: res.page,
+                pageCount: res.pageCount,
               }
             : message
         );
@@ -245,7 +251,7 @@ export default function ChatPage() {
                     message={m}
                     disabled={loading}
                     onSelectNotice={chooseNotice}
-                    onLoadMore={loadMore}
+                    onChangePage={changePage}
                   />
                 )}
               </li>
@@ -367,12 +373,12 @@ function BotBubble({
   message,
   disabled,
   onSelectNotice,
-  onLoadMore,
+  onChangePage,
 }: {
   message: Message;
   disabled: boolean;
   onSelectNotice: (source: ChatSource) => void;
-  onLoadMore: () => void;
+  onChangePage: (page: number) => void;
 }) {
   return (
     <motion.div
@@ -412,20 +418,35 @@ function BotBubble({
               <SourceCard
                 key={s.id ?? i}
                 source={s}
-                selectable={Boolean(message.selectionRequired)}
                 disabled={disabled}
                 onSelect={onSelectNotice}
               />
             ))}
-            {message.selectionRequired && message.hasMore && (
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={onLoadMore}
-                className="mt-2 w-full rounded-xl border border-primary/30 bg-primary/5 px-3 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
-              >
-                공지 더보기
-              </button>
+            {message.selectionRequired && (message.pageCount ?? 1) > 1 && (
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  disabled={disabled || (message.page ?? 1) <= 1}
+                  onClick={() => onChangePage((message.page ?? 1) - 1)}
+                  className="rounded-lg border border-border px-3 py-2 text-xs font-medium disabled:opacity-40"
+                >
+                  이전
+                </button>
+                <span className="text-xs text-muted-foreground">
+                  {message.page ?? 1} / {message.pageCount}
+                </span>
+                <button
+                  type="button"
+                  disabled={
+                    disabled ||
+                    (message.page ?? 1) >= (message.pageCount ?? 1)
+                  }
+                  onClick={() => onChangePage((message.page ?? 1) + 1)}
+                  className="rounded-lg border border-border px-3 py-2 text-xs font-medium disabled:opacity-40"
+                >
+                  다음
+                </button>
+              </div>
             )}
           </div>
         )}
@@ -467,17 +488,16 @@ function formatSourceDate(s: string): string {
 
 function SourceCard({
   source,
-  selectable,
   disabled,
   onSelect,
 }: {
   source: ChatSource;
-  selectable: boolean;
   disabled: boolean;
   onSelect: (source: ChatSource) => void;
 }) {
+  const canSelect = source.id !== null;
   const body = (
-    <div className="group flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2.5 transition-colors hover:border-primary/40 hover:bg-accent/40">
+    <div className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5">
       <div className="min-w-0 flex-1">
         <p className="line-clamp-2 text-[13px] font-medium leading-snug text-foreground group-hover:text-primary">
           {source.title}
@@ -488,24 +508,37 @@ function SourceCard({
           </p>
         )}
       </div>
-      {selectable ? (
+      {canSelect ? (
         <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70 group-hover:text-primary" />
-      ) : source.url ? (
-        <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70 group-hover:text-primary" />
       ) : null}
     </div>
   );
 
-  if (selectable) {
+  if (canSelect) {
     return (
-      <button
-        type="button"
-        disabled={disabled || source.id === null}
-        onClick={() => onSelect(source)}
-        className="block w-full rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50"
-      >
-        {body}
-      </button>
+      <div className="group flex overflow-hidden rounded-xl border border-border bg-card transition-colors hover:border-primary/40 hover:bg-accent/40">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onSelect(source)}
+          className="flex min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+          aria-label={`${source.title} 요약 보기`}
+        >
+          {body}
+        </button>
+        {source.url && (
+          <a
+            href={source.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`${source.title} 원문 보기`}
+            title="원문 보기"
+            className="flex w-11 shrink-0 items-center justify-center border-l border-border text-muted-foreground hover:bg-accent hover:text-primary"
+          >
+            <ExternalLink className="h-4 w-4" />
+          </a>
+        )}
+      </div>
     );
   }
 

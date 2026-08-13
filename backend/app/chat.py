@@ -29,6 +29,7 @@ def chat(
                 else None
             ),
             load_more=request.action == "load_more",
+            candidate_page=(request.page if request.action == "page" else None),
         )
     except (ChunkRepositoryError, NoticeRepositoryError) as error:
         raise HTTPException(
@@ -42,4 +43,6 @@ def chat(
         sources=result.sources,
         selectionRequired=result.selection_required,
         hasMore=result.has_more,
+        page=result.page,
+        pageCount=result.page_count,
     )

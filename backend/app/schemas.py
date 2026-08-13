@@ -69,6 +69,7 @@ class ChatStatePayload(BaseModel):
     )
     active_notice_id: int | str | None = None
     pending_answer_question: str | None = Field(default=None, max_length=1000)
+    candidate_page: int = Field(default=1, ge=1, le=100)
     router_context: list[dict[str, str]] = Field(
         default_factory=list,
         max_length=6,
@@ -76,9 +77,10 @@ class ChatStatePayload(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    action: Literal["message", "select_notice", "load_more"] = "message"
+    action: Literal["message", "select_notice", "load_more", "page"] = "message"
     message: str = Field(default="", max_length=1000)
     selected_notice_id: int | str | None = None
+    page: int | None = Field(default=None, ge=1, le=100)
     state: ChatStatePayload | None = None
 
     @model_validator(mode="after")
@@ -91,6 +93,8 @@ class ChatRequest(BaseModel):
             )
         if self.action == "load_more" and self.state is None:
             raise ValueError("load_more 액션에는 기존 대화 상태가 필요합니다.")
+        if self.action == "page" and (self.state is None or self.page is None):
+            raise ValueError("page 액션에는 기존 대화 상태와 page가 필요합니다.")
         return self
 
 
@@ -107,3 +111,5 @@ class ChatResponse(BaseModel):
     sources: list[ChatSource]
     selectionRequired: bool = False
     hasMore: bool = False
+    page: int = 1
+    pageCount: int = 1

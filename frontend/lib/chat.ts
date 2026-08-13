@@ -20,6 +20,8 @@ export type ChatResponse = {
   sources: ChatSource[];
   selectionRequired: boolean;
   hasMore: boolean;
+  page: number;
+  pageCount: number;
 };
 
 const API_BASE =
@@ -48,6 +50,13 @@ export async function loadMoreNotices(
   state: ChatState
 ): Promise<ChatResponse> {
   return requestChat({ action: "load_more", state });
+}
+
+export async function changeNoticePage(
+  page: number,
+  state: ChatState
+): Promise<ChatResponse> {
+  return requestChat({ action: "page", page, state });
 }
 
 async function requestChat(
