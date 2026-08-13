@@ -214,6 +214,45 @@ class ChatbotServiceTests(unittest.TestCase):
         self.assertEqual([source["id"] for source in result.sources], [2, 3, 4])
         self.assertTrue(result.has_more)
 
+    def test_logs_router_interpretation_and_searched_notices(self):
+        search_results = [
+            {
+                "notice": self.service.notice_repository.fetch_notice(10),
+                "hybrid_score": 0.91,
+                "semantic_score": 0.9,
+                "keyword_score": 0.8,
+                "matched_keywords": ["장학금"],
+            }
+        ]
+        plan = QueryPlan(
+            route=QueryRoute.NOTICE_SEARCH,
+            search_query="장학금 공지",
+            confidence=0.93,
+        )
+
+        with (
+            patch("rag.src.chatbot.plan_question", return_value=plan),
+            patch.object(self.service, "_search", return_value=search_results),
+            patch(
+                "rag.src.chatbot.get_relevant_notices",
+                return_value=search_results,
+            ),
+            patch(
+                "rag.src.chatbot.generate_answer",
+                return_value="장학금 안내입니다.",
+            ),
+            self.assertLogs("uvicorn.error", level="INFO") as logs,
+        ):
+            self.service.handle_message("장학금 알려줘")
+
+        output = "\n".join(logs.output)
+        self.assertIn("[chat.router]", output)
+        self.assertIn("search_query='장학금 공지'", output)
+        self.assertIn("[chat.search]", output)
+        self.assertIn("장학금 신청 안내", output)
+        self.assertIn("hybrid=0.9100", output)
+        self.assertIn("[chat.filter] searched=1 passed=1", output)
+
     def test_chatbot_search_policy_matches_search_module(self):
         self.assertEqual(chatbot_module.TOP_K, search_module.TOP_K)
         self.assertEqual(

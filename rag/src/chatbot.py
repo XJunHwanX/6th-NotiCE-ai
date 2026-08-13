@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -36,6 +37,7 @@ from .search import (
 
 RESET_PATTERNS = {"초기화", "처음부터", "대화 리셋", "검색 리셋"}
 RETRIEVAL_MODES = {"hybrid", "keyword"}
+logger = logging.getLogger("uvicorn.error")
 
 # search.py의 검색 정책을 HTTP 챗봇에서도 동일하게 적용합니다.
 TOP_K = 15
@@ -308,6 +310,14 @@ class ChatbotService:
 
         conversation = self._restore_state(state_snapshot or {})
 
+        if question:
+            logger.info(
+                "[chat.question] raw=%r has_context=%s active_notice_id=%r",
+                self._log_text(question),
+                conversation.has_context,
+                self._active_notice_id(conversation),
+            )
+
         if load_more:
             return self._show_next_candidate_page(conversation)
 
@@ -381,12 +391,28 @@ class ChatbotService:
         processed_query = self.preprocessor.process(question)
         answer_question = processed_query.normalized
 
+        logger.info(
+            "[chat.preprocess] normalized=%r aliases=%s",
+            self._log_text(processed_query.normalized),
+            [
+                f"{match.alias}->{match.meaning}"
+                for match in processed_query.resolved_aliases
+            ],
+        )
+
         plan = plan_question(
             question=processed_query.normalized,
             router_context=conversation.build_router_context(),
         )
         conversation.add_message("user", processed_query.normalized)
         query_route = plan.route
+        logger.info(
+            "[chat.router] route=%s search_query=%r confidence=%.3f source=%s",
+            plan.route.value,
+            self._log_text(plan.search_query),
+            plan.confidence,
+            plan.source,
+        )
 
         if plan.route == QueryRoute.MORE_NOTICE_SEARCH:
             return self._show_next_candidate_page(conversation)
@@ -431,6 +457,12 @@ class ChatbotService:
         )
 
         resolution = conversation.resolve(processed_query, intent)
+        logger.info(
+            "[chat.resolve] search_question=%r intent=%s excluded_ids=%s",
+            self._log_text(resolution.search_question),
+            resolution.intent.value,
+            list(resolution.exclude_notice_ids),
+        )
         if resolution.clarification:
             return self._result(resolution.clarification, conversation)
 
@@ -439,6 +471,7 @@ class ChatbotService:
             query_route=query_route,
             exclude_notice_ids=resolution.exclude_notice_ids,
         )
+        self._log_search_results("search", search_results)
         relevant_results = get_relevant_notices(
             results=search_results,
             required_keywords=self.preprocessor.extract_keywords(
@@ -446,6 +479,18 @@ class ChatbotService:
             ),
         )
         relevant_results = sort_notices_by_published_at(relevant_results)
+        relevant_ids = set(self._notice_ids(relevant_results))
+        logger.info(
+            "[chat.filter] searched=%d passed=%d passed_ids=%s",
+            len(search_results),
+            len(relevant_results),
+            list(relevant_ids),
+        )
+        self._log_search_results(
+            "candidate",
+            relevant_results,
+            passed_ids=relevant_ids,
+        )
 
         if not relevant_results:
             if query_route == QueryRoute.OPEN_NOTICE_SEARCH:
@@ -551,6 +596,47 @@ class ChatbotService:
             for result in results
             if (notice_id := result.get("notice", {}).get("id")) is not None
         ]
+
+    @staticmethod
+    def _active_notice_id(conversation: ConversationState) -> Any | None:
+        if conversation.active_result is None:
+            return None
+        return conversation.active_result.get("notice", {}).get("id")
+
+    @staticmethod
+    def _log_text(value: Any, limit: int = 300) -> str:
+        return " ".join(str(value or "").split())[:limit]
+
+    @classmethod
+    def _log_search_results(
+        cls,
+        stage: str,
+        results: list[dict],
+        passed_ids: set[Any] | None = None,
+    ) -> None:
+        for rank, result in enumerate(results, start=1):
+            notice = result.get("notice") or {}
+            notice_id = notice.get("id")
+            logger.info(
+                "[chat.%s] rank=%d id=%r title=%r published_at=%r "
+                "hybrid=%s semantic=%s keyword=%s passed=%s",
+                stage,
+                rank,
+                notice_id,
+                cls._log_text(notice.get("title")),
+                notice.get("published_at"),
+                cls._log_score(result.get("hybrid_score")),
+                cls._log_score(result.get("semantic_score")),
+                cls._log_score(result.get("keyword_score")),
+                passed_ids is None or notice_id in passed_ids,
+            )
+
+    @staticmethod
+    def _log_score(value: Any) -> str:
+        try:
+            return f"{float(value):.4f}"
+        except (TypeError, ValueError):
+            return "n/a"
 
     def _search(
         self,
