@@ -20,7 +20,7 @@ from .db import (
     get_notice_repository,
     get_rag_search_source,
 )
-from .llm import generate_answer, generate_general_answer
+from .llm import generate_answer, generate_general_answer, judge_notice_candidates
 from .preprocess import DEFAULT_PREPROCESSOR, QueryPreprocessor
 from .retriever import (
     search_notice_chunks,
@@ -39,17 +39,11 @@ RESET_PATTERNS = {"초기화", "처음부터", "대화 리셋", "검색 리셋"}
 RETRIEVAL_MODES = {"hybrid", "keyword"}
 logger = logging.getLogger("uvicorn.error")
 
-# search.py의 검색 정책을 HTTP 챗봇에서도 동일하게 적용합니다.
+# 검색 점수는 후보 순위에만 사용하고 관련성 통과 여부는 Gemini가 판정합니다.
 TOP_K = 15
 MAX_RESULT_CHOICES = 3
 SEMANTIC_WEIGHT = 0.85
 KEYWORD_WEIGHT = 0.15
-MIN_TOP_SCORE = 0.67
-MIN_KEYWORD_SCORE = 0.7
-MIN_SEMANTIC_SCORE = 0.8
-MAX_SEMANTIC_SCORE_GAP = 0.025
-MIN_SPECIFIC_QUERY_KEYWORDS = 3
-MIN_KEYWORD_COVERAGE = 0.5
 
 RECENT_SORT_PATTERNS = (
     "최신순",
@@ -61,10 +55,6 @@ RECENT_SORT_PATTERNS = (
     "작성일순",
     "작성일 순",
 )
-
-
-def normalize_text(text: str) -> str:
-    return " ".join(text.lower().split())
 
 
 def search_notices(
@@ -115,64 +105,6 @@ def search_notices(
     return results[: min(top_k, len(results))]
 
 
-def get_relevant_notices(
-    results: list[dict],
-    min_top_score: float = MIN_TOP_SCORE,
-    min_keyword_score: float = MIN_KEYWORD_SCORE,
-    min_semantic_score: float = MIN_SEMANTIC_SCORE,
-    required_keywords: list[str] | tuple[str, ...] | None = None,
-) -> list[dict]:
-    """search.py와 같은 임계점·키워드 커버리지로 후보를 확정합니다."""
-    if not results:
-        return []
-
-    top_score = results[0]["hybrid_score"]
-    top_keyword_score = max(result["keyword_score"] for result in results)
-    top_semantic_score = max(result["semantic_score"] for result in results)
-
-    if (
-        top_score < min_top_score
-        and top_keyword_score < min_keyword_score
-        and top_semantic_score < min_semantic_score
-    ):
-        return []
-
-    unique_required_keywords = {
-        normalize_text(keyword)
-        for keyword in (required_keywords or ())
-        if normalize_text(keyword)
-    }
-    relevant_results = []
-
-    for result in results:
-        semantic_score_gap = top_semantic_score - result["semantic_score"]
-        has_strong_keyword_match = (
-            result["keyword_score"] >= min_keyword_score
-        )
-        has_strong_semantic_match = (
-            result["semantic_score"] >= min_semantic_score
-            and semantic_score_gap <= MAX_SEMANTIC_SCORE_GAP
-        )
-        if not (has_strong_keyword_match or has_strong_semantic_match):
-            continue
-
-        if len(unique_required_keywords) >= MIN_SPECIFIC_QUERY_KEYWORDS:
-            matched_keywords = {
-                normalize_text(keyword)
-                for keyword in result.get("matched_keywords", [])
-            }
-            keyword_coverage = (
-                len(unique_required_keywords & matched_keywords)
-                / len(unique_required_keywords)
-            )
-            if keyword_coverage < MIN_KEYWORD_COVERAGE:
-                continue
-
-        relevant_results.append(result)
-
-    return sort_notices_by_published_at(relevant_results)
-
-
 def sort_notices_by_published_at(results: list[dict]) -> list[dict]:
     return sorted(
         results,
@@ -186,10 +118,6 @@ def sort_notices_by_published_at(results: list[dict]) -> list[dict]:
 def is_recent_sort_request(question: str) -> bool:
     normalized = " ".join(question.lower().split())
     return any(pattern in normalized for pattern in RECENT_SORT_PATTERNS)
-
-
-def should_answer_without_selection(route: QueryRoute | None) -> bool:
-    return route == QueryRoute.EXAM_NOTICE_SEARCH
 
 
 class ChatbotConfigurationError(RuntimeError):
@@ -479,19 +407,27 @@ class ChatbotService:
             exclude_notice_ids=resolution.exclude_notice_ids,
         )
         self._log_search_results("search", search_results)
-        relevant_results = get_relevant_notices(
-            results=search_results,
-            required_keywords=self.preprocessor.extract_keywords(
-                resolution.search_question
-            ),
+        decision = judge_notice_candidates(
+            question=answer_question,
+            search_query=resolution.search_question,
+            candidates=search_results,
+            router_context=conversation.build_router_context(),
         )
-        relevant_results = sort_notices_by_published_at(relevant_results)
+        relevant_results = self._select_results_by_id(
+            search_results,
+            decision.notice_ids,
+        )
+        if decision.mode == "list":
+            relevant_results = sort_notices_by_published_at(relevant_results)
         relevant_ids = set(self._notice_ids(relevant_results))
         logger.info(
-            "[chat.filter] searched=%d passed=%d passed_ids=%s",
+            "[chat.judge] mode=%s searched=%d selected=%d selected_ids=%s "
+            "reason=%r",
+            decision.mode,
             len(search_results),
             len(relevant_results),
             list(relevant_ids),
+            self._log_text(decision.reason),
         )
         self._log_search_results(
             "candidate",
@@ -499,7 +435,7 @@ class ChatbotService:
             passed_ids=relevant_ids,
         )
 
-        if not relevant_results:
+        if decision.mode == "not_found" or not relevant_results:
             if query_route == QueryRoute.OPEN_NOTICE_SEARCH:
                 answer = (
                     "현재 신청 가능한 공지를 확인하지 못했습니다. "
@@ -519,8 +455,8 @@ class ChatbotService:
         conversation.shown_notice_ids = self._notice_ids(displayed_results)
         conversation.referenced_notice_ids = self._notice_ids(displayed_results)
 
-        if should_answer_without_selection(query_route):
-            direct_results = [self._hydrate(result) for result in displayed_results]
+        if decision.mode == "answer":
+            direct_results = [self._hydrate(result) for result in relevant_results]
             conversation.candidate_results = direct_results
             conversation.active_result = direct_results[0]
             answer = generate_answer(
@@ -530,23 +466,13 @@ class ChatbotService:
             )
             return self._result(answer, conversation, direct_results)
 
-        if len(displayed_results) > 1:
-            return self._result(
-                self._create_card_selection_answer(displayed_results),
-                conversation,
-                displayed_results,
-                selection_required=True,
-                has_more=has_more,
-            )
-
-        active_result = self._hydrate(displayed_results[0])
-        conversation.active_result = active_result
-        answer = generate_answer(
-            question=answer_question,
-            relevant_results=[active_result],
-            answer_mode="focused",
+        return self._result(
+            self._create_card_selection_answer(displayed_results),
+            conversation,
+            displayed_results,
+            selection_required=True,
+            has_more=has_more,
         )
-        return self._result(answer, conversation, [active_result])
 
     def _show_next_candidate_page(
         self,
@@ -572,7 +498,7 @@ class ChatbotService:
         answer = (
             self._create_card_selection_answer(visible_results)
             if has_more
-            else "임계점을 통과한 공지를 모두 보여드렸습니다. 궁금한 공지 카드를 선택해주세요."
+            else "관련 공지를 모두 보여드렸습니다. 궁금한 공지 카드를 선택해주세요."
         )
         return self._result(
             answer,
@@ -602,6 +528,18 @@ class ChatbotService:
             notice_id
             for result in results
             if (notice_id := result.get("notice", {}).get("id")) is not None
+        ]
+
+    @staticmethod
+    def _select_results_by_id(
+        results: list[dict],
+        selected_ids: list[Any],
+    ) -> list[dict]:
+        selected = {str(notice_id) for notice_id in selected_ids}
+        return [
+            result
+            for result in results
+            if str(result.get("notice", {}).get("id")) in selected
         ]
 
     @staticmethod

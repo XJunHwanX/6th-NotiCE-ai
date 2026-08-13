@@ -2,8 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from rag.src.chatbot import ChatbotService
-from rag.src import chatbot as chatbot_module
-from rag.src import search as search_module
+from rag.src.llm import NoticeCandidateDecision
 from rag.src.preprocess import QueryPreprocessor
 from rag.src.router import QueryPlan, QueryRoute
 
@@ -188,7 +187,7 @@ class ChatbotServiceTests(unittest.TestCase):
         self.assertEqual(result.state["router_context"][-2]["content"], "안녕")
         self.assertEqual(result.state["router_context"][-1]["content"], "안녕하세요!")
 
-    def test_initial_search_caches_all_threshold_candidates_newest_first(self):
+    def test_list_decision_caches_selected_candidates_newest_first(self):
         search_results = [
             {"notice": self.service.notice_repository.fetch_notice(notice_id)}
             for notice_id in [5, 4, 3, 2]
@@ -203,8 +202,11 @@ class ChatbotServiceTests(unittest.TestCase):
             patch("rag.src.chatbot.plan_question", return_value=plan),
             patch.object(self.service, "_search", return_value=search_results),
             patch(
-                "rag.src.chatbot.get_relevant_notices",
-                return_value=list(reversed(search_results)),
+                "rag.src.chatbot.judge_notice_candidates",
+                return_value=NoticeCandidateDecision(
+                    mode="list",
+                    notice_ids=[5, 4, 3, 2],
+                ),
             ),
         ):
             result = self.service.handle_message("장학금 알려줘")
@@ -234,8 +236,12 @@ class ChatbotServiceTests(unittest.TestCase):
             patch("rag.src.chatbot.plan_question", return_value=plan),
             patch.object(self.service, "_search", return_value=search_results),
             patch(
-                "rag.src.chatbot.get_relevant_notices",
-                return_value=search_results,
+                "rag.src.chatbot.judge_notice_candidates",
+                return_value=NoticeCandidateDecision(
+                    mode="answer",
+                    notice_ids=[10],
+                    reason="장학금 신청 기한을 답할 수 있음",
+                ),
             ),
             patch(
                 "rag.src.chatbot.generate_answer",
@@ -252,57 +258,30 @@ class ChatbotServiceTests(unittest.TestCase):
         self.assertIn("장학금 신청 안내", output)
         self.assertIn("hybrid=0.9100", output)
         self.assertIn("filter_status=pending", output)
-        self.assertIn("[chat.filter] searched=1 passed=1", output)
+        self.assertIn("[chat.judge] mode=answer searched=1 selected=1", output)
 
-    def test_chatbot_search_policy_matches_search_module(self):
-        self.assertEqual(chatbot_module.TOP_K, search_module.TOP_K)
-        self.assertEqual(
-            chatbot_module.SEMANTIC_WEIGHT,
-            search_module.SEMANTIC_WEIGHT,
-        )
-        self.assertEqual(
-            chatbot_module.KEYWORD_WEIGHT,
-            search_module.KEYWORD_WEIGHT,
-        )
-        self.assertEqual(chatbot_module.MIN_TOP_SCORE, search_module.MIN_TOP_SCORE)
-        self.assertEqual(
-            chatbot_module.MIN_KEYWORD_SCORE,
-            search_module.MIN_KEYWORD_SCORE,
-        )
-        self.assertEqual(
-            chatbot_module.MIN_SEMANTIC_SCORE,
-            search_module.MIN_SEMANTIC_SCORE,
-        )
-        self.assertEqual(
-            chatbot_module.MAX_SEMANTIC_SCORE_GAP,
-            search_module.MAX_SEMANTIC_SCORE_GAP,
-        )
-        self.assertEqual(
-            chatbot_module.MIN_KEYWORD_COVERAGE,
-            search_module.MIN_KEYWORD_COVERAGE,
-        )
-
-        results = [
-            {
-                "hybrid_score": 0.8,
-                "keyword_score": 0.8,
-                "semantic_score": 0.79,
-                "matched_keywords": ["장학금"],
-                "notice": {"id": 1, "published_at": "2026-08-01"},
-            },
-            {
-                "hybrid_score": 0.78,
-                "keyword_score": 0.75,
-                "semantic_score": 0.78,
-                "matched_keywords": ["장학금"],
-                "notice": {"id": 2, "published_at": "2026-08-02"},
-            },
+    def test_not_found_decision_does_not_expose_search_candidates(self):
+        search_results = [
+            {"notice": self.service.notice_repository.fetch_notice(10)}
         ]
-
-        self.assertEqual(
-            chatbot_module.get_relevant_notices(results),
-            search_module.get_relevant_notices(results),
+        plan = QueryPlan(
+            route=QueryRoute.NOTICE_SEARCH,
+            search_query="없는 공지",
+            confidence=0.9,
         )
+        with (
+            patch("rag.src.chatbot.plan_question", return_value=plan),
+            patch.object(self.service, "_search", return_value=search_results),
+            patch(
+                "rag.src.chatbot.judge_notice_candidates",
+                return_value=NoticeCandidateDecision(mode="not_found"),
+            ),
+        ):
+            result = self.service.handle_message("없는 공지 알려줘")
+
+        self.assertIn("관련 내용을 찾지 못했습니다", result.answer)
+        self.assertEqual(result.sources, [])
+        self.assertFalse(result.selection_required)
 
     def test_reset_discards_client_state(self):
         result = self.service.handle_message(
