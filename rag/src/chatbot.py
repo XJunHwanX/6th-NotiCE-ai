@@ -42,6 +42,7 @@ logger = logging.getLogger("uvicorn.error")
 # 검색 점수는 후보 순위에만 사용하고 관련성 통과 여부는 Gemini가 판정합니다.
 TOP_K = 15
 MAX_RESULT_CHOICES = 3
+JUDGE_FULL_NOTICE_LIMIT = 5
 SEMANTIC_WEIGHT = 0.85
 KEYWORD_WEIGHT = 0.15
 
@@ -276,7 +277,7 @@ class ChatbotService:
             answer = generate_answer(
                 question=answer_question,
                 relevant_results=[selected_result],
-                answer_mode="focused",
+                answer_mode="summary",
             )
             return self._result(answer, conversation, [selected_result])
 
@@ -295,7 +296,7 @@ class ChatbotService:
             answer = generate_answer(
                 question=answer_question,
                 relevant_results=[selected_result],
-                answer_mode="focused",
+                answer_mode="summary",
             )
             return self._result(answer, conversation, [selected_result])
 
@@ -316,7 +317,10 @@ class ChatbotService:
             conversation.shown_notice_ids = visible_ids
             conversation.referenced_notice_ids = visible_ids
             return self._result(
-                self._create_card_selection_answer(visible_results),
+                self._create_card_selection_answer(
+                    visible_results,
+                    total_count=len(conversation.candidate_results),
+                ),
                 conversation,
                 visible_results,
                 selection_required=True,
@@ -407,10 +411,14 @@ class ChatbotService:
             exclude_notice_ids=resolution.exclude_notice_ids,
         )
         self._log_search_results("search", search_results)
+        judge_candidates = [
+            self._hydrate(result) if index < JUDGE_FULL_NOTICE_LIMIT else result
+            for index, result in enumerate(search_results)
+        ]
         decision = judge_notice_candidates(
             question=answer_question,
             search_query=resolution.search_question,
-            candidates=search_results,
+            candidates=judge_candidates,
             router_context=conversation.build_router_context(),
         )
         relevant_results = self._select_results_by_id(
@@ -467,7 +475,10 @@ class ChatbotService:
             return self._result(answer, conversation, direct_results)
 
         return self._result(
-            self._create_card_selection_answer(displayed_results),
+            self._create_card_selection_answer(
+                displayed_results,
+                total_count=len(relevant_results),
+            ),
             conversation,
             displayed_results,
             selection_required=True,
@@ -496,7 +507,10 @@ class ChatbotService:
 
         has_more = visible_count < len(conversation.candidate_results)
         answer = (
-            self._create_card_selection_answer(visible_results)
+            self._create_card_selection_answer(
+                visible_results,
+                total_count=len(conversation.candidate_results),
+            )
             if has_more
             else "관련 공지를 모두 보여드렸습니다. 궁금한 공지 카드를 선택해주세요."
         )
@@ -516,10 +530,18 @@ class ChatbotService:
         )
 
     @staticmethod
-    def _create_card_selection_answer(results: list[dict]) -> str:
+    def _create_card_selection_answer(
+        results: list[dict],
+        total_count: int | None = None,
+    ) -> str:
+        total = total_count if total_count is not None else len(results)
+        count_text = (
+            f"관련 공지 총 {total}개 중 {len(results)}개를 보여드렸습니다."
+            if total > len(results)
+            else f"관련 공지 {total}개를 찾았습니다."
+        )
         return (
-            f"관련 공지 {len(results)}개를 찾았습니다. "
-            "궁금한 공지 카드를 선택해주세요."
+            f"{count_text} 궁금한 공지 카드를 선택해주세요."
         )
 
     @staticmethod
