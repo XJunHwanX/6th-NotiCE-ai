@@ -32,6 +32,9 @@ type Message = {
 let idSeq = 0;
 const nextId = () => `${Date.now()}-${idSeq++}`;
 
+// 화면을 벗어났다 돌아와도 대화가 이어지도록 세션 동안 보관 (탭을 닫으면 사라짐)
+const CHAT_STORAGE_KEY = "notice:chat-session";
+
 export default function ChatPage() {
   const [messages, setMessages] = React.useState<Message[]>([]);
   const [chatState, setChatState] = React.useState<ChatState>(null);
@@ -50,6 +53,37 @@ export default function ChatPage() {
     const el = scrollRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [messages, loading]);
+
+  // 대화 내용을 세션에 저장 (빈 상태는 저장하지 않고, 초기화는 reset에서 처리)
+  React.useEffect(() => {
+    if (messages.length === 0) return;
+    try {
+      sessionStorage.setItem(
+        CHAT_STORAGE_KEY,
+        JSON.stringify({ messages, chatState })
+      );
+    } catch {
+      // 저장 불가 환경은 무시
+    }
+  }, [messages, chatState]);
+
+  // 마운트 시(다른 화면 갔다 돌아옴 포함) 이전 대화 복원
+  React.useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(CHAT_STORAGE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as {
+        messages?: Message[];
+        chatState?: ChatState;
+      };
+      if (Array.isArray(saved.messages) && saved.messages.length > 0) {
+        setMessages(saved.messages);
+        setChatState(saved.chatState ?? null);
+      }
+    } catch {
+      // 파싱 실패 등은 무시
+    }
+  }, []);
 
   const send = async (raw: string) => {
     const text = raw.trim();
@@ -106,6 +140,11 @@ export default function ChatPage() {
     setMessages([]);
     setChatState(null);
     setInput("");
+    try {
+      sessionStorage.removeItem(CHAT_STORAGE_KEY);
+    } catch {
+      // 무시
+    }
   };
 
   return (
@@ -185,6 +224,9 @@ export default function ChatPage() {
           />
           <button
             type="submit"
+            // 입력창이 포커스된 상태에서 버튼을 눌러도 blur(키보드 내림)로 첫 탭이
+            // 먹히지 않도록, 포커스 이동을 막아 한 번에 전송되게 함
+            onMouseDown={(e) => e.preventDefault()}
             disabled={!input.trim() || loading}
             aria-label="보내기"
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-opacity disabled:opacity-40"
