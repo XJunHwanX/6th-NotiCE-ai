@@ -158,9 +158,17 @@ GET /api/push/vapid-public-key
 ## 6. Render 무료 배포
 
 레포 최상위의 `render.yaml`을 Blueprint로 연결하면 무료 Web Service가
-생성됩니다. 무료 인스턴스의 메모리 제한에 맞추기 위해 Render에서는
-`RAG_RETRIEVAL_MODE=keyword`를 사용합니다. Gemini 답변 생성과 출처 표시는
-유지되지만, 로컬의 의미 임베딩 검색 대신 Supabase 키워드 RPC로 검색합니다.
+생성됩니다. `RAG_RETRIEVAL_MODE=hybrid`는 로컬 모델을 적재하지 않고
+Gemini Embedding API의 의미 임베딩과 키워드 검색을 함께 사용합니다.
+검색 점수는 상위 후보의 순서를 정하는 데만 사용합니다. 고정 임계값으로 공지를
+제외하지 않고, 상위 후보의 제목과 본문을 Gemini가 다시 읽어 구체 질문은 바로
+답변하고 목록 질문은 관련 공지 카드만 표시합니다.
+
+기존 `notice_chunks`가 E5 벡터라면 배포 전에 Gemini 벡터로 한 번 갱신합니다.
+
+```bash
+python pipeline/reembed_notice_chunks.py
+```
 
 Blueprint 생성 화면에서 `sync: false`로 선언된 다음 값을 입력합니다.
 

@@ -6,6 +6,8 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from google import genai
+from google.genai import types
+from pydantic import BaseModel, Field
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -13,6 +15,12 @@ load_dotenv(ROOT_DIR / ".env")
 
 LLM_MODEL_NAME = "gemini-3.5-flash"
 _client: genai.Client | None = None
+
+
+class NoticeCandidateDecision(BaseModel):
+    mode: str = Field(pattern="^(answer|list|not_found)$")
+    notice_ids: list[int | str] = Field(default_factory=list)
+    reason: str = ""
 
 
 def get_client() -> genai.Client:
@@ -81,6 +89,131 @@ def create_source_section(results: list[dict]) -> str:
 def append_source_section(answer: str, results: list[dict]) -> str:
     """LLM이 출처를 빠뜨려도 코드에서 항상 출처를 붙입니다."""
     return f"{answer.strip()}{create_source_section(results)}"
+
+
+def create_candidate_context(results: list[dict]) -> str:
+    """판별기에 전달할 검색 후보를 길이 제한과 함께 직렬화합니다."""
+    parts = []
+    for result in results:
+        notice = result.get("notice") or {}
+        content = " ".join(str(notice.get("content") or "").split())[:2500]
+        parts.append(
+            "\n".join([
+                f"[공지 ID: {notice.get('id')}]",
+                f"제목: {notice.get('title', '')}",
+                f"카테고리: {notice.get('category', '')}",
+                f"게시일: {notice.get('published_at', '')}",
+                f"마감일: {notice.get('deadline', '')}",
+                f"검색된 본문: {content}",
+            ])
+        )
+    return "\n\n".join(parts)
+
+
+def judge_notice_candidates(
+    question: str,
+    search_query: str,
+    candidates: list[dict],
+    router_context: str = "",
+    now: datetime | None = None,
+    client: Any | None = None,
+) -> NoticeCandidateDecision:
+    """검색 상위 후보에서 실제 관련 공지와 다음 UI 동작을 판정합니다."""
+    if not candidates:
+        return NoticeCandidateDecision(mode="not_found")
+
+    current_datetime = now or datetime.now(ZoneInfo("Asia/Seoul"))
+    candidate_context = create_candidate_context(candidates)
+    prompt = f"""
+당신은 공지 검색 결과의 관련성을 최종 판정하는 시스템입니다.
+검색 점수나 후보 순위를 정답으로 간주하지 말고 공지의 제목과 본문을 직접 읽으세요.
+후보에 존재하는 공지 ID만 반환하세요.
+
+[판정 모드]
+- answer: 사용자가 날짜, 장소, 신청 방법, IP, 특정 공지 요약처럼 구체적인 답을
+  요구하며, 선택한 공지 본문으로 바로 답할 수 있음
+- list: 장학금 공지, 대회, 모집처럼 관련 공지 목록 자체를 요청함
+- not_found: 어떤 후보도 질문과 직접 관련이 없거나 후보 본문으로 답할 수 없음
+
+[규칙]
+1. 단어가 비슷하다는 이유만으로 관련 있다고 판정하지 마세요.
+2. answer는 질문에 답하는 데 필요한 최소 공지만 선택하세요.
+3. list는 질문 주제에 실제 해당하는 공지를 빠짐없이 선택하세요.
+4. "공지 알려줘", "뭐 있어?", "목록 보여줘"는 목록 요청입니다. 현재 신청 가능,
+   모집 중, 마감 전이라는 표현이 없다면 마감 여부로 제외하지 마세요.
+5. 목록 요청에서는 제목이 질문의 주제와 직접 일치하는 공지를 관련 공지로
+   인정하세요. 공지의 주목적이 질문 주제여야 하며, 본문이나 제목의 괄호에 해당
+   단어가 부수적인 조건·참고사항으로만 등장하는 공지는 제외하세요. 본문에 질문의
+   구체적인 답이 있어야 할 필요는 없습니다.
+6. 현재 신청 가능 여부가 중요하면 현재 시각과 마감일·본문을 확인하세요.
+7. 과거 학기와 현재 학기 공지가 섞이면 질문에 맞는 학기를 선택하세요. 질문이
+   학기를 제한하지 않은 목록 요청이면 관련된 여러 학기 공지를 선택할 수 있습니다.
+8. 관련 공지가 하나도 없으면 반드시 not_found와 빈 notice_ids를 반환하세요.
+
+[현재 시각]
+{current_datetime.isoformat()} (Asia/Seoul)
+
+[최근 대화와 상태]
+{router_context or "없음"}
+
+[현재 사용자 질문]
+{question}
+
+[검색용으로 해석된 질문]
+{search_query}
+
+[검색 후보]
+{candidate_context}
+""".strip()
+
+    try:
+        response = (client or get_client()).models.generate_content(
+            model=LLM_MODEL_NAME,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0,
+                response_mime_type="application/json",
+                response_schema=NoticeCandidateDecision,
+            ),
+        )
+        parsed = getattr(response, "parsed", None)
+        if parsed is None:
+            if not response.text:
+                raise ValueError("후보 판별기가 빈 응답을 반환했습니다.")
+            decision = NoticeCandidateDecision.model_validate_json(response.text)
+        else:
+            decision = NoticeCandidateDecision.model_validate(parsed)
+    except Exception:
+        # 판별기 장애가 검색 전체 장애로 번지지 않도록 후보 목록을 그대로 제공합니다.
+        return NoticeCandidateDecision(
+            mode="list",
+            notice_ids=[result.get("notice", {}).get("id") for result in candidates],
+            reason="candidate_judge_fallback",
+        )
+
+    valid_ids = {
+        str(result.get("notice", {}).get("id"))
+        for result in candidates
+        if result.get("notice", {}).get("id") is not None
+    }
+    selected_ids = []
+    for notice_id in decision.notice_ids:
+        if str(notice_id) in valid_ids and str(notice_id) not in {
+            str(existing) for existing in selected_ids
+        }:
+            selected_ids.append(notice_id)
+
+    if decision.mode == "not_found" or not selected_ids:
+        return NoticeCandidateDecision(
+            mode="not_found",
+            reason=decision.reason,
+        )
+
+    return NoticeCandidateDecision(
+        mode=decision.mode,
+        notice_ids=selected_ids,
+        reason=decision.reason,
+    )
 
 
 def _friendly_llm_error(error: Exception) -> str:

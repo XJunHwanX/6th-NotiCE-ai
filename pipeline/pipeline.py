@@ -16,7 +16,7 @@ GitHub Actions로 주기적 실행 (예: 6시간마다)
 
 필요 환경변수(.env 또는 GitHub Secrets):
     SUPABASE_URL, SUPABASE_KEY, SUPABASE_SERVICE_ROLE_KEY
-    GEMINI_API_KEY            (본문 이미지 OCR용)
+    GEMINI_API_KEY            (본문 이미지 OCR 및 공지 임베딩용)
     VAPID_PRIVATE_KEY         (web-push가 생성한 URL-safe base64 비밀키 권장)
     VAPID_PRIVATE_KEY_PATH    (PEM/DER 파일을 쓸 때의 선택 설정)
     VAPID_CLAIMS_EMAIL
@@ -39,8 +39,7 @@ from supabase import create_client
 from pywebpush import webpush, WebPushException
 
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
-from chunk_and_embed import save_notice_chunks, EMBEDDING_MODEL_NAME
+from chunk_and_embed import save_notice_chunks
 from extract_deadline import extract_deadline
 
 # pipeline.py가 있는 폴더 기준으로 .env 찾기
@@ -48,7 +47,9 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 # backend 폴더의 notice_classifier를 import할 수 있게 경로 추가
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "backend"))
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from notice_classifier import load_classifier, predict_category  # noqa: E402
+from rag.src.embedding import GeminiEmbeddingModel  # noqa: E402
 
 
 # ============================================
@@ -445,8 +446,8 @@ def main():
     print("3. 분류 모델 로드 중...")
     classifier = load_classifier(MODEL_DIR)
 
-    print("3-1. 임베딩 모델 로드 중...")
-    embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+    print("3-1. Gemini 임베딩 클라이언트 준비 중...")
+    embedding_model = GeminiEmbeddingModel()
 
     for notice in new_notices:
         print(f"\n[{notice['article_no']}] {notice['title'][:40]}")

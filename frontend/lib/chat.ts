@@ -18,6 +18,10 @@ export type ChatResponse = {
   answer: string;
   state: ChatState;
   sources: ChatSource[];
+  selectionRequired: boolean;
+  hasMore: boolean;
+  page: number;
+  pageCount: number;
 };
 
 const API_BASE =
@@ -28,12 +32,42 @@ export async function sendChat(
   message: string,
   state: ChatState
 ): Promise<ChatResponse> {
+  return requestChat({ action: "message", message, state });
+}
+
+export async function selectNotice(
+  noticeId: string | number,
+  state: ChatState
+): Promise<ChatResponse> {
+  return requestChat({
+    action: "select_notice",
+    selected_notice_id: noticeId,
+    state,
+  });
+}
+
+export async function loadMoreNotices(
+  state: ChatState
+): Promise<ChatResponse> {
+  return requestChat({ action: "load_more", state });
+}
+
+export async function changeNoticePage(
+  page: number,
+  state: ChatState
+): Promise<ChatResponse> {
+  return requestChat({ action: "page", page, state });
+}
+
+async function requestChat(
+  body: Record<string, unknown>
+): Promise<ChatResponse> {
   let res: Response;
   try {
     res = await fetch(`${API_BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, state }),
+      body: JSON.stringify(body),
     });
   } catch {
     throw new Error(

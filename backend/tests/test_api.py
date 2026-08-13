@@ -11,9 +11,23 @@ from backend.tests.test_push_service import FakePushRepository
 
 
 class FakeChatbotService:
-    def handle_message(self, message, state_snapshot=None):
+    def handle_message(
+        self,
+        message,
+        state_snapshot=None,
+        selected_notice_id=None,
+        load_more=False,
+        candidate_page=None,
+    ):
+        answer = (
+            f"선택: {selected_notice_id}"
+            if selected_notice_id is not None
+            else "추가 공지"
+            if load_more
+            else f"답변: {message}"
+        )
         return ChatResult(
-            answer=f"답변: {message}",
+            answer=answer,
             state={
                 "last_search_query": message,
                 "referenced_notice_ids": [],
@@ -95,10 +109,36 @@ class BackendApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["answer"], "답변: 장학 공지 알려줘")
+        self.assertFalse(response.json()["hasMore"])
         self.assertEqual(
             response.json()["state"]["last_search_query"],
             "장학 공지 알려줘",
         )
+
+    def test_selects_notice_with_explicit_action(self):
+        response = self.client.post(
+            "/api/chat",
+            json={
+                "action": "select_notice",
+                "selected_notice_id": 10,
+                "state": None,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["answer"], "선택: 10")
+
+    def test_loads_more_notices_with_explicit_action(self):
+        response = self.client.post(
+            "/api/chat",
+            json={
+                "action": "load_more",
+                "state": {"last_search_query": "장학금 공지"},
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["answer"], "추가 공지")
 
 
 if __name__ == "__main__":

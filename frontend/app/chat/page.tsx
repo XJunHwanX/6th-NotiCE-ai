@@ -16,6 +16,8 @@ import { TabBar } from "@/components/tab-bar";
 import { ChatMarkdown } from "@/components/chat-markdown";
 import {
   sendChat,
+  selectNotice,
+  changeNoticePage,
   SUGGESTED_QUESTIONS,
   type ChatSource,
   type ChatState,
@@ -26,6 +28,11 @@ type Message = {
   role: "user" | "bot";
   text: string;
   sources?: ChatSource[];
+  selectionRequired?: boolean;
+  hasMore?: boolean;
+  page?: number;
+  pageCount?: number;
+  state?: ChatState;
   error?: boolean;
 };
 
@@ -92,7 +99,13 @@ export default function ChatPage() {
     setInput("");
     if (taRef.current) taRef.current.style.height = "auto";
 
-    setMessages((prev) => [...prev, { id: nextId(), role: "user", text }]);
+    setMessages((prev) => [
+      ...prev.map((message) => ({
+        ...message,
+        selectionRequired: false,
+      })),
+      { id: nextId(), role: "user", text },
+    ]);
     setLoading(true);
 
     try {
@@ -105,8 +118,97 @@ export default function ChatPage() {
           role: "bot",
           text: res.answer,
           sources: res.sources ?? [],
+          selectionRequired: res.selectionRequired,
+          hasMore: res.hasMore,
+          page: res.page,
+          pageCount: res.pageCount,
+          state: res.state,
         },
       ]);
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextId(),
+          role: "bot",
+          text: (err as Error).message,
+          error: true,
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const chooseNotice = async (source: ChatSource, state: ChatState) => {
+    if (source.id === null || loading) return;
+
+    setMessages((prev) => [
+      ...prev,
+      { id: nextId(), role: "user", text: `「${source.title}」 공지 선택` },
+    ]);
+    setLoading(true);
+
+    try {
+      const res = await selectNotice(source.id, state);
+      setChatState(res.state);
+      setMessages((prev) => [
+        ...prev.map((message) => ({
+          ...message,
+          selectionRequired: false,
+        })),
+        {
+          id: nextId(),
+          role: "bot",
+          text: res.answer,
+          sources: res.sources ?? [],
+          selectionRequired: res.selectionRequired,
+          state: res.state,
+        },
+      ]);
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextId(),
+          role: "bot",
+          text: (err as Error).message,
+          error: true,
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const changePage = async (page: number) => {
+    if (loading) return;
+
+    setLoading(true);
+    try {
+      const res = await changeNoticePage(page, chatState);
+      setChatState(res.state);
+      setMessages((prev) => {
+        const targetIndex = prev.findLastIndex(
+          (message) => message.role === "bot" && message.selectionRequired
+        );
+        if (targetIndex === -1) return prev;
+
+        return prev.map((message, index) =>
+          index === targetIndex
+            ? {
+                ...message,
+                text: res.answer,
+                sources: res.sources ?? [],
+                selectionRequired: res.selectionRequired,
+                hasMore: res.hasMore,
+                page: res.page,
+                pageCount: res.pageCount,
+                state: res.state,
+              }
+            : message
+        );
+      });
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -188,7 +290,14 @@ export default function ChatPage() {
                 {m.role === "user" ? (
                   <UserBubble text={m.text} />
                 ) : (
-                  <BotBubble message={m} />
+                  <BotBubble
+                    message={m}
+                    disabled={loading}
+                    onSelectNotice={(source) =>
+                      chooseNotice(source, m.state ?? chatState)
+                    }
+                    onChangePage={changePage}
+                  />
                 )}
               </li>
             ))}
@@ -308,7 +417,17 @@ function UserBubble({ text }: { text: string }) {
   );
 }
 
-function BotBubble({ message }: { message: Message }) {
+function BotBubble({
+  message,
+  disabled,
+  onSelectNotice,
+  onChangePage,
+}: {
+  message: Message;
+  disabled: boolean;
+  onSelectNotice: (source: ChatSource) => void;
+  onChangePage: (page: number) => void;
+}) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 6 }}
@@ -340,11 +459,43 @@ function BotBubble({ message }: { message: Message }) {
         {message.sources && message.sources.length > 0 && (
           <div className="space-y-1.5">
             <p className="px-1 text-[11px] font-medium text-muted-foreground">
-              참고한 공지 {message.sources.length}건
+              {message.selectionRequired ? "선택 가능한 공지" : "참고한 공지"}{" "}
+              {message.sources.length}건
             </p>
             {message.sources.map((s, i) => (
-              <SourceCard key={s.id ?? i} source={s} />
+              <SourceCard
+                key={s.id ?? i}
+                source={s}
+                disabled={disabled}
+                onSelect={onSelectNotice}
+              />
             ))}
+            {message.selectionRequired && (message.pageCount ?? 1) > 1 && (
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  disabled={disabled || (message.page ?? 1) <= 1}
+                  onClick={() => onChangePage((message.page ?? 1) - 1)}
+                  className="rounded-lg border border-border px-3 py-2 text-xs font-medium disabled:opacity-40"
+                >
+                  이전
+                </button>
+                <span className="text-xs text-muted-foreground">
+                  {message.page ?? 1} / {message.pageCount}
+                </span>
+                <button
+                  type="button"
+                  disabled={
+                    disabled ||
+                    (message.page ?? 1) >= (message.pageCount ?? 1)
+                  }
+                  onClick={() => onChangePage((message.page ?? 1) + 1)}
+                  className="rounded-lg border border-border px-3 py-2 text-xs font-medium disabled:opacity-40"
+                >
+                  다음
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -383,9 +534,18 @@ function formatSourceDate(s: string): string {
   return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`;
 }
 
-function SourceCard({ source }: { source: ChatSource }) {
+function SourceCard({
+  source,
+  disabled,
+  onSelect,
+}: {
+  source: ChatSource;
+  disabled: boolean;
+  onSelect: (source: ChatSource) => void;
+}) {
+  const canSelect = source.id !== null;
   const body = (
-    <div className="group flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2.5 transition-colors hover:border-primary/40 hover:bg-accent/40">
+    <div className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5">
       <div className="min-w-0 flex-1">
         <p className="line-clamp-2 text-[13px] font-medium leading-snug text-foreground group-hover:text-primary">
           {source.title}
@@ -396,11 +556,39 @@ function SourceCard({ source }: { source: ChatSource }) {
           </p>
         )}
       </div>
-      {source.url && (
-        <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70 group-hover:text-primary" />
-      )}
+      {canSelect ? (
+        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70 group-hover:text-primary" />
+      ) : null}
     </div>
   );
+
+  if (canSelect) {
+    return (
+      <div className="group flex overflow-hidden rounded-xl border border-border bg-card transition-colors hover:border-primary/40 hover:bg-accent/40">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onSelect(source)}
+          className="flex min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+          aria-label={`${source.title} 요약 보기`}
+        >
+          {body}
+        </button>
+        {source.url && (
+          <a
+            href={source.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`${source.title} 원문 보기`}
+            title="원문 보기"
+            className="flex w-11 shrink-0 items-center justify-center border-l border-border text-muted-foreground hover:bg-accent hover:text-primary"
+          >
+            <ExternalLink className="h-4 w-4" />
+          </a>
+        )}
+      </div>
+    );
+  }
 
   if (source.url) {
     return (

@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from rag.src.llm import generate_answer
+from rag.src.llm import generate_answer, judge_notice_candidates
 
 
 class FakeResponse:
@@ -48,6 +48,65 @@ class AnswerPromptTests(unittest.TestCase):
         self.assertIn("알고리즘 시험 언제야?", prompt)
         self.assertIn("정확히 일치하는 과목 행", prompt)
         self.assertIn("2026-06-10T12:00:00+09:00", prompt)
+
+    def test_candidate_judge_keeps_only_valid_candidate_ids(self):
+        client = FakeClient()
+        client.models.generate_content = lambda **kwargs: type(
+            "Response",
+            (),
+            {
+                "parsed": {
+                    "mode": "answer",
+                    "notice_ids": [20, 999],
+                    "reason": "20번 공지로 답변 가능",
+                },
+                "text": None,
+            },
+        )()
+        candidates = [
+            {
+                "notice": {
+                    "id": 20,
+                    "title": "기말고사 일정",
+                    "content": "알고리즘 시험은 6월 18일입니다.",
+                }
+            }
+        ]
+
+        decision = judge_notice_candidates(
+            question="알고리즘 시험 언제야?",
+            search_query="알고리즘 기말고사 일정",
+            candidates=candidates,
+            client=client,
+        )
+
+        self.assertEqual(decision.mode, "answer")
+        self.assertEqual(decision.notice_ids, [20])
+
+    def test_candidate_judge_returns_not_found_for_empty_selection(self):
+        client = FakeClient()
+        client.models.generate_content = lambda **kwargs: type(
+            "Response",
+            (),
+            {
+                "parsed": {
+                    "mode": "list",
+                    "notice_ids": [999],
+                    "reason": "후보와 무관",
+                },
+                "text": None,
+            },
+        )()
+
+        decision = judge_notice_candidates(
+            question="국가장학금 공지",
+            search_query="국가장학금",
+            candidates=[{"notice": {"id": 20, "title": "기말고사"}}],
+            client=client,
+        )
+
+        self.assertEqual(decision.mode, "not_found")
+        self.assertEqual(decision.notice_ids, [])
 
 
 if __name__ == "__main__":

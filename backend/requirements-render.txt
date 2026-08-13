@@ -1,5 +1,4 @@
-# Render 무료 인스턴스용 경량 API 의존성입니다.
-# 임베딩 모델은 Supabase 키워드 검색으로 대체해 torch를 설치하지 않습니다.
+# Render API 의존성입니다. 질문 임베딩은 Gemini API로 생성합니다.
 fastapi==0.116.1
 google-genai==2.14.0
 numpy>=1.24,<2.6
