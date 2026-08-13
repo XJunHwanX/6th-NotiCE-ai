@@ -23,6 +23,12 @@ def chat(
             state_snapshot=(
                 request.state.model_dump() if request.state is not None else None
             ),
+            selected_notice_id=(
+                request.selected_notice_id
+                if request.action == "select_notice"
+                else None
+            ),
+            load_more=request.action == "load_more",
         )
     except (ChunkRepositoryError, NoticeRepositoryError) as error:
         raise HTTPException(
@@ -34,4 +40,6 @@ def chat(
         answer=result.answer,
         state=result.state,
         sources=result.sources,
+        selectionRequired=result.selection_required,
+        hasMore=result.has_more,
     )

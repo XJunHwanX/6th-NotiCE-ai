@@ -12,7 +12,7 @@ services:
       - key: APP_ENV
         value: production
       - key: RAG_RETRIEVAL_MODE
-        value: keyword
+        value: hybrid
       - key: RAG_SEARCH_SOURCE
         value: chunks
       - key: NOTICE_SOURCE

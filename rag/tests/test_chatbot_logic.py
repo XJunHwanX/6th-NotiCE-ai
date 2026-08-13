@@ -236,6 +236,24 @@ class ConversationStateTests(unittest.TestCase):
         self.assertEqual(ordinal["notice"]["id"], 20)
         self.assertEqual(title["notice"]["id"], 10)
 
+    def test_selects_candidate_by_explicit_id(self):
+        self.state.candidate_results = [
+            {"notice": {"id": 10, "title": "AI 아이디어 경진대회"}},
+            {"notice": {"id": 20, "title": "소프트웨어 공모전"}},
+        ]
+
+        selected = self.state.select_candidate_by_id("20")
+
+        self.assertEqual(selected["notice"]["id"], 20)
+        self.assertEqual(self.state.active_result["notice"]["id"], 20)
+
+    def test_rejects_explicit_id_outside_candidates(self):
+        self.state.candidate_results = [
+            {"notice": {"id": 10, "title": "AI 아이디어 경진대회"}},
+        ]
+
+        self.assertIsNone(self.state.select_candidate_by_id(999))
+
 
 class SearchTests(unittest.TestCase):
     def test_rejects_specific_query_with_low_keyword_coverage(self):

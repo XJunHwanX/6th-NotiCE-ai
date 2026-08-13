@@ -49,6 +49,8 @@ class ConversationState:
         if not self.candidate_results:
             return None, None
 
+        selectable_results = self._selectable_results()
+
         normalized = " ".join(question.strip().split())
         compact = normalized.replace(" ", "")
         selection_number = None
@@ -73,7 +75,7 @@ class ConversationState:
         if selection_number is None:
             title_matches = []
 
-            for result in self.candidate_results:
+            for result in selectable_results:
                 title = str(result.get("notice", {}).get("title") or "")
 
                 if title and title in normalized:
@@ -83,17 +85,49 @@ class ConversationState:
                 selected = title_matches[0]
             else:
                 return None, None
-        elif selection_number < 1 or selection_number > len(self.candidate_results):
+        elif selection_number < 1 or selection_number > len(selectable_results):
             return None, (
-                f"1번부터 {len(self.candidate_results)}번 사이에서 선택해주세요."
+                f"1번부터 {len(selectable_results)}번 사이에서 선택해주세요."
             )
         else:
-            selected = self.candidate_results[selection_number - 1]
+            selected = selectable_results[selection_number - 1]
 
         self.active_result = selected
         notice_id = selected.get("notice", {}).get("id")
         self.referenced_notice_ids = [notice_id] if notice_id is not None else []
         return selected, None
+
+    def select_candidate_by_id(self, notice_id: Any) -> dict | None:
+        """현재 검색 후보에 포함된 공지만 명시적인 ID로 선택합니다."""
+        selected = next(
+            (
+                result
+                for result in self._selectable_results()
+                if str(result.get("notice", {}).get("id")) == str(notice_id)
+            ),
+            None,
+        )
+        if selected is None:
+            return None
+
+        self.active_result = selected
+        selected_id = selected.get("notice", {}).get("id")
+        self.referenced_notice_ids = (
+            [selected_id] if selected_id is not None else []
+        )
+        return selected
+
+    def _selectable_results(self) -> list[dict]:
+        """페이지에서 사용자에게 실제 공개된 후보만 선택 대상으로 반환합니다."""
+        if not self.shown_notice_ids:
+            return self.candidate_results
+
+        shown_ids = {str(notice_id) for notice_id in self.shown_notice_ids}
+        return [
+            result
+            for result in self.candidate_results
+            if str(result.get("notice", {}).get("id")) in shown_ids
+        ]
 
     def resolve(
         self,
@@ -152,19 +186,13 @@ class ConversationState:
             if notice_id is not None and notice_id not in notice_ids:
                 notice_ids.append(notice_id)
 
-        self.referenced_notice_ids = notice_ids
-        self.candidate_results = list(results)
         self.active_result = None
         self.pending_answer_question = (
             answer_question or resolution.search_question
         )
 
-        if resolution.intent == QueryIntent.MORE_RESULTS:
-            for notice_id in notice_ids:
-                if notice_id not in self.shown_notice_ids:
-                    self.shown_notice_ids.append(notice_id)
-            return
-
+        self.referenced_notice_ids = notice_ids
+        self.candidate_results = list(results)
         self.last_search_query = resolution.search_question
         self.shown_notice_ids = notice_ids.copy()
 

@@ -16,6 +16,8 @@ import { TabBar } from "@/components/tab-bar";
 import { ChatMarkdown } from "@/components/chat-markdown";
 import {
   sendChat,
+  selectNotice,
+  loadMoreNotices,
   SUGGESTED_QUESTIONS,
   type ChatSource,
   type ChatState,
@@ -26,6 +28,8 @@ type Message = {
   role: "user" | "bot";
   text: string;
   sources?: ChatSource[];
+  selectionRequired?: boolean;
+  hasMore?: boolean;
   error?: boolean;
 };
 
@@ -58,7 +62,13 @@ export default function ChatPage() {
     setInput("");
     if (taRef.current) taRef.current.style.height = "auto";
 
-    setMessages((prev) => [...prev, { id: nextId(), role: "user", text }]);
+    setMessages((prev) => [
+      ...prev.map((message) => ({
+        ...message,
+        selectionRequired: false,
+      })),
+      { id: nextId(), role: "user", text },
+    ]);
     setLoading(true);
 
     try {
@@ -71,8 +81,90 @@ export default function ChatPage() {
           role: "bot",
           text: res.answer,
           sources: res.sources ?? [],
+          selectionRequired: res.selectionRequired,
+          hasMore: res.hasMore,
         },
       ]);
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextId(),
+          role: "bot",
+          text: (err as Error).message,
+          error: true,
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const chooseNotice = async (source: ChatSource) => {
+    if (source.id === null || loading) return;
+
+    setMessages((prev) => [
+      ...prev,
+      { id: nextId(), role: "user", text: `「${source.title}」 공지 선택` },
+    ]);
+    setLoading(true);
+
+    try {
+      const res = await selectNotice(source.id, chatState);
+      setChatState(res.state);
+      setMessages((prev) => [
+        ...prev.map((message) => ({
+          ...message,
+          selectionRequired: false,
+        })),
+        {
+          id: nextId(),
+          role: "bot",
+          text: res.answer,
+          sources: res.sources ?? [],
+          selectionRequired: res.selectionRequired,
+        },
+      ]);
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextId(),
+          role: "bot",
+          text: (err as Error).message,
+          error: true,
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadMore = async () => {
+    if (loading) return;
+
+    setLoading(true);
+    try {
+      const res = await loadMoreNotices(chatState);
+      setChatState(res.state);
+      setMessages((prev) => {
+        const targetIndex = prev.findLastIndex(
+          (message) => message.role === "bot" && message.selectionRequired
+        );
+        if (targetIndex === -1) return prev;
+
+        return prev.map((message, index) =>
+          index === targetIndex
+            ? {
+                ...message,
+                text: res.answer,
+                sources: res.sources ?? [],
+                selectionRequired: res.selectionRequired,
+                hasMore: res.hasMore,
+              }
+            : message
+        );
+      });
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -149,7 +241,12 @@ export default function ChatPage() {
                 {m.role === "user" ? (
                   <UserBubble text={m.text} />
                 ) : (
-                  <BotBubble message={m} />
+                  <BotBubble
+                    message={m}
+                    disabled={loading}
+                    onSelectNotice={chooseNotice}
+                    onLoadMore={loadMore}
+                  />
                 )}
               </li>
             ))}
@@ -266,7 +363,17 @@ function UserBubble({ text }: { text: string }) {
   );
 }
 
-function BotBubble({ message }: { message: Message }) {
+function BotBubble({
+  message,
+  disabled,
+  onSelectNotice,
+  onLoadMore,
+}: {
+  message: Message;
+  disabled: boolean;
+  onSelectNotice: (source: ChatSource) => void;
+  onLoadMore: () => void;
+}) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 6 }}
@@ -298,11 +405,28 @@ function BotBubble({ message }: { message: Message }) {
         {message.sources && message.sources.length > 0 && (
           <div className="space-y-1.5">
             <p className="px-1 text-[11px] font-medium text-muted-foreground">
-              참고한 공지 {message.sources.length}건
+              {message.selectionRequired ? "선택 가능한 공지" : "참고한 공지"}{" "}
+              {message.sources.length}건
             </p>
             {message.sources.map((s, i) => (
-              <SourceCard key={s.id ?? i} source={s} />
+              <SourceCard
+                key={s.id ?? i}
+                source={s}
+                selectable={Boolean(message.selectionRequired)}
+                disabled={disabled}
+                onSelect={onSelectNotice}
+              />
             ))}
+            {message.selectionRequired && message.hasMore && (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={onLoadMore}
+                className="mt-2 w-full rounded-xl border border-primary/30 bg-primary/5 px-3 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
+              >
+                공지 더보기
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -341,7 +465,17 @@ function formatSourceDate(s: string): string {
   return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`;
 }
 
-function SourceCard({ source }: { source: ChatSource }) {
+function SourceCard({
+  source,
+  selectable,
+  disabled,
+  onSelect,
+}: {
+  source: ChatSource;
+  selectable: boolean;
+  disabled: boolean;
+  onSelect: (source: ChatSource) => void;
+}) {
   const body = (
     <div className="group flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2.5 transition-colors hover:border-primary/40 hover:bg-accent/40">
       <div className="min-w-0 flex-1">
@@ -354,11 +488,26 @@ function SourceCard({ source }: { source: ChatSource }) {
           </p>
         )}
       </div>
-      {source.url && (
+      {selectable ? (
+        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70 group-hover:text-primary" />
+      ) : source.url ? (
         <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70 group-hover:text-primary" />
-      )}
+      ) : null}
     </div>
   );
+
+  if (selectable) {
+    return (
+      <button
+        type="button"
+        disabled={disabled || source.id === null}
+        onClick={() => onSelect(source)}
+        className="block w-full rounded-xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50"
+      >
+        {body}
+      </button>
+    );
+  }
 
   if (source.url) {
     return (
