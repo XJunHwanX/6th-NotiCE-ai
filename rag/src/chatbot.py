@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from .config import EMBEDDING_MODEL_NAME
+from .config import GEMINI_EMBEDDING_MODEL_NAME
 from .conversation import ConversationState
 from .db import (
     AliasRepositoryError,
@@ -252,9 +252,9 @@ class ChatbotService:
             )
             model = None
             if retrieval_mode == "hybrid":
-                from sentence_transformers import SentenceTransformer
+                from .embedding import GeminiEmbeddingModel
 
-                model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+                model = GeminiEmbeddingModel()
         except Exception as error:
             raise ChatbotConfigurationError(
                 f"챗봇 초기화에 실패했습니다: {error}"
@@ -279,6 +279,13 @@ class ChatbotService:
                 model=model,
                 notices=notices,
             )
+
+        logger.info(
+            "[chat.init] retrieval_mode=%s search_source=%s model=%s",
+            retrieval_mode,
+            search_source,
+            GEMINI_EMBEDDING_MODEL_NAME if model is not None else "none",
+        )
 
         return cls(
             model=model,
@@ -619,7 +626,7 @@ class ChatbotService:
             notice_id = notice.get("id")
             logger.info(
                 "[chat.%s] rank=%d id=%r title=%r published_at=%r "
-                "hybrid=%s semantic=%s keyword=%s passed=%s",
+                "hybrid=%s semantic=%s keyword=%s filter_status=%s",
                 stage,
                 rank,
                 notice_id,
@@ -628,7 +635,13 @@ class ChatbotService:
                 cls._log_score(result.get("hybrid_score")),
                 cls._log_score(result.get("semantic_score")),
                 cls._log_score(result.get("keyword_score")),
-                passed_ids is None or notice_id in passed_ids,
+                (
+                    "pending"
+                    if passed_ids is None
+                    else "passed"
+                    if notice_id in passed_ids
+                    else "rejected"
+                ),
             )
 
     @staticmethod

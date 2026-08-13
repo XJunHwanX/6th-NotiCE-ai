@@ -251,6 +251,7 @@ class ChatbotServiceTests(unittest.TestCase):
         self.assertIn("[chat.search]", output)
         self.assertIn("장학금 신청 안내", output)
         self.assertIn("hybrid=0.9100", output)
+        self.assertIn("filter_status=pending", output)
         self.assertIn("[chat.filter] searched=1 passed=1", output)
 
     def test_chatbot_search_policy_matches_search_module(self):

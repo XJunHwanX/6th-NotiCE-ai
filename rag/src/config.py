@@ -2,3 +2,4 @@
 
 EMBEDDING_MODEL_NAME = "intfloat/multilingual-e5-small"
 EMBEDDING_DIMENSION = 384
+GEMINI_EMBEDDING_MODEL_NAME = "gemini-embedding-001"

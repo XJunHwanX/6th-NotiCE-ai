@@ -1,13 +1,9 @@
-# Render 하이브리드 검색 시험용 API 의존성입니다.
-# 질문 임베딩 생성을 위해 아래 모델 런타임을 함께 설치합니다.
+# Render API 의존성입니다. 질문 임베딩은 Gemini API로 생성합니다.
 fastapi==0.116.1
 google-genai==2.14.0
 numpy>=1.24,<2.6
 pydantic==2.13.4
 python-dotenv==1.2.2
 requests==2.34.2
-sentence-transformers==5.6.1
-torch==2.13.0
-transformers==5.14.1
 tzdata==2026.2
 uvicorn==0.35.0

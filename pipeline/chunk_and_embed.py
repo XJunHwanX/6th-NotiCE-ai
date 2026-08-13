@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-EMBEDDING_MODEL_NAME = "intfloat/multilingual-e5-small"
 EMBEDDING_DIMENSION = 384
 MIN_CHUNK_CHARS = 500
 MAX_CHUNK_CHARS = 800
@@ -83,29 +82,21 @@ def calculate_notice_hash(notice: dict) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def create_chunk_drafts(notice: dict, tokenizer, max_sequence_tokens: int = 512) -> list[dict]:
+def create_chunk_drafts(notice: dict) -> list[dict]:
     content_chunks = split_notice_content(notice.get("content")) or ["(본문 없음)"]
     content_hash = calculate_notice_hash(notice)
 
-    metadata_prefix = build_chunk_text(notice, "")
-    prefix_tokens = len(tokenizer.encode(f"passage: {metadata_prefix}", add_special_tokens=True))
-    content_token_budget = max(64, max_sequence_tokens - prefix_tokens - 8)
-
     drafts = []
     for chunk_index, content_text in enumerate(content_chunks):
-        # 너무 긴 청크는 자르기 (토큰 예산 기준 대략적 char 환산)
-        if len(content_text) > content_token_budget * 3:
-            content_text = content_text[: content_token_budget * 3]
-
         chunk_text = build_chunk_text(notice, content_text)
-        token_count = len(tokenizer.encode(f"passage: {chunk_text}", add_special_tokens=True))
 
         drafts.append({
             "notice_id": notice["id"],
             "chunk_index": chunk_index,
             "content_text": content_text,
             "chunk_text": chunk_text,
-            "token_count": token_count,
+            # Gemini 토크나이저를 로컬에 올리지 않기 위한 보수적인 근삿값입니다.
+            "token_count": max(1, (len(chunk_text) + 1) // 2),
             "content_hash": content_hash,
         })
 
@@ -113,9 +104,7 @@ def create_chunk_drafts(notice: dict, tokenizer, max_sequence_tokens: int = 512)
 
 
 def generate_chunk_rows(notice: dict, model) -> list[dict]:
-    tokenizer = model.tokenizer
-    max_sequence_tokens = int(getattr(model, "max_seq_length", 512) or 512)
-    drafts = create_chunk_drafts(notice, tokenizer, max_sequence_tokens)
+    drafts = create_chunk_drafts(notice)
 
     embedding_inputs = [f"passage: {d['chunk_text']}" for d in drafts]
     embeddings = np.asarray(

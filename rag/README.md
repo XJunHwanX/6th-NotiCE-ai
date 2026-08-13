@@ -33,11 +33,18 @@ LLM 라우터는 일반 공지, 신청 가능한 공지, 시험 공지, 선택 �
 
 | 항목 | 계약 |
 | --- | --- |
-| 임베딩 모델 | `intfloat/multilingual-e5-small` |
+| 임베딩 모델 | `gemini-embedding-001` |
 | 임베딩 차원 | 384 |
 | 청크 입력 형식 | `passage: {청크 텍스트}` |
 | 질문 입력 형식 | `query: {사용자 질문}` |
 | 정규화 | passage와 query 모두 L2 정규화 |
+
+기존 E5 임베딩이 저장되어 있다면 Gemini 질문 임베딩과 섞어 쓸 수 없습니다.
+배포 전에 서비스 역할 키가 있는 환경에서 아래 명령을 한 번 실행합니다.
+
+```bash
+python pipeline/reembed_notice_chunks.py
+```
 
 `notice_chunks`의 최소 필수 컬럼은 다음과 같습니다.
 
@@ -76,12 +83,15 @@ cp rag/.env.example .env
 GEMINI_API_KEY=your_gemini_api_key
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your_supabase_publishable_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 NOTICE_SOURCE=supabase
 RAG_SEARCH_SOURCE=chunks
+RAG_RETRIEVAL_MODE=hybrid
 ```
 
 챗봇은 공개 가능한 Supabase publishable key로 읽기 RPC만 호출합니다. 청크 적재에
-사용하는 secret 또는 service-role key는 챗봇 환경에 두지 않습니다.
+사용하는 service-role key는 재임베딩 및 크롤링 환경에만 두고 프론트에는 절대
+노출하지 않습니다.
 
 ## 설치 및 실행
 
