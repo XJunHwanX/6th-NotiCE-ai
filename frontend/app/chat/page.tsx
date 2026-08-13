@@ -32,6 +32,7 @@ type Message = {
   hasMore?: boolean;
   page?: number;
   pageCount?: number;
+  state?: ChatState;
   error?: boolean;
 };
 
@@ -87,6 +88,7 @@ export default function ChatPage() {
           hasMore: res.hasMore,
           page: res.page,
           pageCount: res.pageCount,
+          state: res.state,
         },
       ]);
     } catch (err) {
@@ -104,7 +106,7 @@ export default function ChatPage() {
     }
   };
 
-  const chooseNotice = async (source: ChatSource) => {
+  const chooseNotice = async (source: ChatSource, state: ChatState) => {
     if (source.id === null || loading) return;
 
     setMessages((prev) => [
@@ -114,7 +116,7 @@ export default function ChatPage() {
     setLoading(true);
 
     try {
-      const res = await selectNotice(source.id, chatState);
+      const res = await selectNotice(source.id, state);
       setChatState(res.state);
       setMessages((prev) => [
         ...prev.map((message) => ({
@@ -127,6 +129,7 @@ export default function ChatPage() {
           text: res.answer,
           sources: res.sources ?? [],
           selectionRequired: res.selectionRequired,
+          state: res.state,
         },
       ]);
     } catch (err) {
@@ -167,6 +170,7 @@ export default function ChatPage() {
                 hasMore: res.hasMore,
                 page: res.page,
                 pageCount: res.pageCount,
+                state: res.state,
               }
             : message
         );
@@ -250,7 +254,9 @@ export default function ChatPage() {
                   <BotBubble
                     message={m}
                     disabled={loading}
-                    onSelectNotice={chooseNotice}
+                    onSelectNotice={(source) =>
+                      chooseNotice(source, m.state ?? chatState)
+                    }
                     onChangePage={changePage}
                   />
                 )}

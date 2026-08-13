@@ -6,8 +6,5 @@ numpy
 pydantic
 python-dotenv
 requests
-sentence-transformers
-torch
-transformers
 tzdata
 uvicorn
