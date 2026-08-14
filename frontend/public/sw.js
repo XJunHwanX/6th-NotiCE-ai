@@ -1,6 +1,6 @@
 /* NotiCE 웹 푸시 서비스워커.
  * - push: 서버가 보낸 푸시 데이터(title, body, url)를 알림으로 표시
- * - notificationclick: 알림 클릭 시 공지 URL로 이동(열린 탭 있으면 포커스, 없으면 새 탭)
+ * - notificationclick: 알림 클릭 시 우리 서비스 홈으로 이동(열린 창 있으면 포커스, 없으면 새 창)
  * public/ 아래 파일이라 번들링되지 않고 /sw.js 로 그대로 서빙됩니다.
  */
 
@@ -27,9 +27,8 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
-  const raw = (event.notification.data && event.notification.data.url) || "/";
-  // 상대 경로도 절대 URL로 정규화해서 정확히 비교
-  const targetUrl = new URL(raw, self.location.origin).href;
+  // 원문 공지 URL 대신 우리 서비스 홈으로 이동시킨다.
+  const homeUrl = new URL("/", self.location.origin).href;
 
   event.waitUntil(
     (async () => {
@@ -38,14 +37,22 @@ self.addEventListener("notificationclick", (event) => {
         includeUncontrolled: true,
       });
 
+      // 이미 열린 창이 있으면 홈으로 이동시키고 포커스
       for (const client of clientList) {
-        if (client.url === targetUrl && "focus" in client) {
+        if ("focus" in client) {
+          if ("navigate" in client && client.url !== homeUrl) {
+            try {
+              await client.navigate(homeUrl);
+            } catch {
+              // 내비게이션 실패해도 포커스는 시도
+            }
+          }
           return client.focus();
         }
       }
 
       if (self.clients.openWindow) {
-        return self.clients.openWindow(targetUrl);
+        return self.clients.openWindow(homeUrl);
       }
     })()
   );

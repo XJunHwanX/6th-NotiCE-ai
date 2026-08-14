@@ -4,10 +4,9 @@ import { getNotices } from "@/lib/notices";
 import { HomeClient } from "@/components/home-client";
 import { OnboardingGate } from "@/components/onboarding-gate";
 
-// 공지는 6시간마다 크롤링 때만 바뀌므로 매 방문 재조회 대신 ISR 캐시로 제공한다.
-// 캐시 만료 후 첫 요청이 오면 백그라운드에서 한 번만 갱신(stale-while-revalidate)하므로
-// 탭 이동이 즉각적이고 서버/DB 부하도 낮다.
-export const revalidate = 600; // 10분
+// 알림을 눌러 홈으로 들어온 사용자에게 방금 뜬 공지가 항상 보이도록 매 방문 최신 조회한다.
+// 조회 지연은 loading.tsx 스켈레톤으로 즉시 가려, 이동은 즉각적으로 느껴진다.
+export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
   let notices;
