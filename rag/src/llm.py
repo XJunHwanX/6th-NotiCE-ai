@@ -104,7 +104,7 @@ def _friendly_llm_error(error: Exception) -> str:
 
 
 def generate_general_answer(
-    question: str,
+    resolved_question: str,
     now: datetime | None = None,
 ) -> str:
     """공지 검색이 필요 없는 짧은 대화에 답변합니다."""
@@ -116,7 +116,7 @@ def generate_general_answer(
 현재 시각은 {current_datetime.isoformat()}, 시간대는 Asia/Seoul입니다.
 
 [사용자 질문]
-{question}
+{resolved_question}
 """.strip()
 
     try:
@@ -135,6 +135,7 @@ def generate_general_answer(
 
 def generate_answer(
     question: str,
+    resolved_question: str,
     relevant_results: list[dict],
     answer_mode: str = "focused",
     now: datetime | None = None,
@@ -170,14 +171,26 @@ def generate_answer(
 9. {mode_instruction}
 10. 시험 날짜, 시간, 장소 질문은 정확히 일치하는 과목 행을 찾아 해당 값을 먼저
     말하고, 공지 전체 요약으로 바꾸지 마세요.
-11. 여러 학기의 일정이 함께 있으면 현재 시각과 공지 작성일을 기준으로 가장 최근
-    학기의 정보를 우선하고, 어느 학기인지 답변에 표시하세요.
+11. 사용자가 특정 학기, 연도, 과목, 교수 등을 명시했다면 그 조건을 반드시 우선하세요.
+    사용자가 학기를 지정하지 않았을 때만 현재 시각과 공지 작성일을 기준으로
+    가장 최근 학기의 정보를 우선하세요.
+12. 답변 생성 단계에서는 사용자의 원본 표현, 약어, 은어를 새롭게 해석하거나
+    다른 과목명·교수명으로 확장하지 마세요.
+    시스템이 제공한 "질문 해석"이 있다면 그것을 최종적으로 확정된 질문으로 간주하세요.
+13. 원본 사용자 질문과 "질문 해석"이 다르게 보이더라도,
+    반드시 "질문 해석"의 과목명, 교수명, 학기, 질문 유형을 기준으로 답하세요.
+14. 시험 공지에서 과목을 찾을 때는 "질문 해석"에 명시된 과목명 또는 교수명과
+    일치하는 행만 사용할 수 있습니다.
+    유사한 이름의 다른 과목 행은 사용하지 마세요.
 
 [현재 시각]
 {current_datetime.isoformat()} (Asia/Seoul)
 
-[사용자 질문]
+[원본 사용자 질문]
 {question}
+
+[질문 해석]
+{resolved_question}
 
 [검색된 공지]
 {context}
