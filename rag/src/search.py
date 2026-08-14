@@ -86,6 +86,9 @@ MAX_SEMANTIC_SCORE_GAP = 0.025
 MIN_SPECIFIC_QUERY_KEYWORDS = 3
 MIN_KEYWORD_COVERAGE = 0.5
 
+# 최고 의미 점수가 이 값보다 낮으면 관련 공지 없음 (임시 추가)
+MIN_SEARCH_TOP_SEMANTIC_SCORE = 0.86
+
 RECENT_SORT_PATTERNS = (
     "최신순",
     "최신 순",
@@ -126,7 +129,6 @@ def create_notice_text(notice: dict) -> str:
 def normalize_text(text: str) -> str:
     """키워드 비교를 위해 대소문자와 공백을 정리합니다."""
     return " ".join(text.lower().split())
-
 
 def extract_keywords(
     question: str,
@@ -298,12 +300,23 @@ def get_relevant_notices(
         result["semantic_score"] for result in results
     )
     
+<<<<<<< HEAD
     # 하이브리드 점수와 키워드 점수가 모두 낮으면 관련 공지 없음
     if (
         top_score < min_top_score 
         and top_keyword_score < min_keyword_score
         and top_semantic_score < min_semantic_score
     ):
+=======
+    # 키워드 점수가 충분히 높거나 의미 점수가 충분히 높으면 관련 공지로 판단
+    has_reliable_search_signal = (
+        top_keyword_score >= min_keyword_score
+        or top_semantic_score >= MIN_SEARCH_TOP_SEMANTIC_SCORE
+    )
+    
+    # 하이브리드 점수와 키워드 점수가 모두 낮으면 관련 공지 없음
+    if not has_reliable_search_signal:
+>>>>>>> fix/chatbot-search
         return []
 
     relevant_results = []
@@ -551,7 +564,8 @@ def main() -> None:
                 or question
             )
             answer = generate_answer(
-                question=answer_question,
+                question=question,
+                resolved_question=answer_question,
                 relevant_results=[selected_result],
                 answer_mode="focused",
             )
@@ -583,8 +597,7 @@ def main() -> None:
             continue
 
         processed_query = preprocessor.process(question)
-        answer_question = processed_query.normalized
-
+               
         if processed_query.resolved_aliases:
             resolved_text = ", ".join(
                 f"{match.alias} → {match.meaning}"
@@ -616,9 +629,26 @@ def main() -> None:
                     "먼저 궁금한 공지를 검색하고 선택해주세요."
                 )
                 continue
+<<<<<<< HEAD
 
             answer = generate_answer(
                 question=answer_question,
+=======
+            
+            previous_search_query = conversation.last_search_query
+
+            if previous_search_query:
+                follow_up_question = (
+                    f"이전 검색 대상: {previous_search_query}\n"
+                    f"현재 후속 질문: {processed_query.normalized}"
+                )
+            else:
+                follow_up_question = processed_query.normalized
+
+            answer = generate_answer(
+                question=question,
+                resolved_question=follow_up_question,
+>>>>>>> fix/chatbot-search
                 relevant_results=[conversation.active_result],
                 answer_mode="focused",
             )
@@ -657,6 +687,7 @@ def main() -> None:
         )
 
         resolution = conversation.resolve(processed_query, intent)
+        resolved_question = resolution.search_question
 
         if intent == QueryIntent.MORE_RESULTS:
             answer_question = resolution.search_question
@@ -743,7 +774,7 @@ def main() -> None:
         conversation.record_results(
             resolution,
             displayed_results,
-            answer_question=answer_question,
+            answer_question=resolved_question,
         )
 
         if should_answer_without_selection(query_route):
@@ -764,7 +795,8 @@ def main() -> None:
             conversation.candidate_results = direct_results
             conversation.active_result = direct_results[0]
             answer = generate_answer(
-                question=answer_question,
+                question=question,
+                resolved_question=resolved_question,
                 relevant_results=direct_results,
                 answer_mode="focused",
             )
@@ -810,7 +842,8 @@ def main() -> None:
         notice = active_result.get("notice", {})
 
         answer = generate_answer(
-            question=answer_question,
+            question=question,
+            resolved_question=resolved_question,
             relevant_results=[active_result],
             answer_mode="focused",
         )
