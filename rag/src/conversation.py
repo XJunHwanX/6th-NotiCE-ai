@@ -33,10 +33,7 @@ class ConversationState:
     active_result: dict | None = None
     pending_answer_question: str | None = None
     router_context: list[dict[str, str]] = field(default_factory=list)
-<<<<<<< HEAD
     candidate_page: int = 1
-=======
->>>>>>> fix/chatbot-search
 
     @property
     def has_context(self) -> bool:
@@ -224,11 +221,7 @@ class ConversationState:
                 for message in self.router_context
             ],
         }
-<<<<<<< HEAD
-
-=======
         
->>>>>>> fix/chatbot-search
     def add_message(self, role: str, content: str) -> None:
         self.router_context.append(
         {

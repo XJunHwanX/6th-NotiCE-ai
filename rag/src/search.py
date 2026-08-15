@@ -300,14 +300,6 @@ def get_relevant_notices(
         result["semantic_score"] for result in results
     )
     
-<<<<<<< HEAD
-    # 하이브리드 점수와 키워드 점수가 모두 낮으면 관련 공지 없음
-    if (
-        top_score < min_top_score 
-        and top_keyword_score < min_keyword_score
-        and top_semantic_score < min_semantic_score
-    ):
-=======
     # 키워드 점수가 충분히 높거나 의미 점수가 충분히 높으면 관련 공지로 판단
     has_reliable_search_signal = (
         top_keyword_score >= min_keyword_score
@@ -316,7 +308,6 @@ def get_relevant_notices(
     
     # 하이브리드 점수와 키워드 점수가 모두 낮으면 관련 공지 없음
     if not has_reliable_search_signal:
->>>>>>> fix/chatbot-search
         return []
 
     relevant_results = []
@@ -597,7 +588,7 @@ def main() -> None:
             continue
 
         processed_query = preprocessor.process(question)
-               
+        
         if processed_query.resolved_aliases:
             resolved_text = ", ".join(
                 f"{match.alias} → {match.meaning}"
@@ -629,11 +620,6 @@ def main() -> None:
                     "먼저 궁금한 공지를 검색하고 선택해주세요."
                 )
                 continue
-<<<<<<< HEAD
-
-            answer = generate_answer(
-                question=answer_question,
-=======
             
             previous_search_query = conversation.last_search_query
 
@@ -648,7 +634,6 @@ def main() -> None:
             answer = generate_answer(
                 question=question,
                 resolved_question=follow_up_question,
->>>>>>> fix/chatbot-search
                 relevant_results=[conversation.active_result],
                 answer_mode="focused",
             )
