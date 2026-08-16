@@ -4,9 +4,9 @@ import { getNotices } from "@/lib/notices";
 import { HomeClient } from "@/components/home-client";
 import { OnboardingGate } from "@/components/onboarding-gate";
 
-// 알림을 눌러 홈으로 들어온 사용자에게 방금 뜬 공지가 항상 보이도록 매 방문 최신 조회한다.
-// 조회 지연은 loading.tsx 스켈레톤으로 즉시 가려, 이동은 즉각적으로 느껴진다.
-export const dynamic = "force-dynamic";
+// 캐시된 목록(ISR)을 CDN에서 즉시 보여 이동을 빠르게 하고, 최신성은 HomeClient가
+// 마운트 시 브라우저에서 다시 조회해 보완한다(알림으로 온 새 공지도 곧 목록에 반영됨).
+export const revalidate = 600; // 즉시 표시용 baseline; 실시간성은 클라 재조회가 담당
 
 export default async function HomePage() {
   let notices;

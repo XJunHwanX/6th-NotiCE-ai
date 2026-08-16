@@ -7,16 +7,33 @@ import { Bell, ChevronLeft, ChevronRight, Check, Inbox } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { CATEGORIES, type CategoryId } from "@/lib/categories";
-import { type Notice } from "@/lib/notices";
+import { getNotices, type Notice } from "@/lib/notices";
 import { NoticeCard } from "@/components/notice-card";
 import { TabBar } from "@/components/tab-bar";
 
 const PAGE_SIZE = 10;
 
-export function HomeClient({ notices }: { notices: Notice[] }) {
+export function HomeClient({ notices: initialNotices }: { notices: Notice[] }) {
+  // 서버(ISR 캐시)가 준 목록을 즉시 보여주고, 마운트 후 브라우저에서 최신을 다시
+  // 불러와 갱신한다. 덕분에 이동은 빠르고(캐시), 알림으로 온 새 공지도 곧 반영된다.
+  const [notices, setNotices] = React.useState<Notice[]>(initialNotices);
   // Empty set = no filter = every notice is shown (the default state).
   const [selected, setSelected] = React.useState<Set<CategoryId>>(new Set());
   const [page, setPage] = React.useState(1);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    getNotices()
+      .then((fresh) => {
+        if (!cancelled) setNotices(fresh);
+      })
+      .catch(() => {
+        // 최신 조회 실패 시 서버가 준 목록을 그대로 유지
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const filtered = React.useMemo(() => {
     if (selected.size === 0) return notices;
