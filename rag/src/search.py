@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
 if __package__:
+    from .embedding import GeminiEmbeddingModel
     from .config import EMBEDDING_MODEL_NAME
     from .conversation import ConversationState
     from .db import (
@@ -32,6 +33,7 @@ if __package__:
         route_to_intent,
     )
 else:
+    from embedding import GeminiEmbeddingModel
     from config import EMBEDDING_MODEL_NAME
     from conversation import ConversationState
     from db import (
@@ -70,24 +72,23 @@ MAX_RESULT_CHOICES = 3
 SEMANTIC_WEIGHT = 0.85
 KEYWORD_WEIGHT = 0.15
 
-# 검색 결과 1위가 이 점수보다 낮으면 관련 없는 질문으로 판단
-MIN_TOP_SCORE = 0.67
-
 # 정확 키워드가 충분히 맞으면 의미 점수가 낮아도 관련 공지로 판단
-MIN_KEYWORD_SCORE = 0.7
+MIN_KEYWORD_SCORE = 0.65
 
 # 키워드 문자열이 달라도 의미가 충분히 유사하다고 판단되면 관련 공지로 판단
-MIN_SEMANTIC_SCORE = 0.8
+MIN_SEMANTIC_SCORE = 0.7
 
 # 의미 점수 차이가 이 값보다 큰 공지는 제외
-MAX_SEMANTIC_SCORE_GAP = 0.025
+MAX_SEMANTIC_SCORE_GAP = 0.05
 
 # 구체적인 질문은 전체 핵심어 중 절반 이상이 실제 공지에 등장해야 함
-MIN_SPECIFIC_QUERY_KEYWORDS = 3
+MIN_SPECIFIC_QUERY_KEYWORDS = 2
 MIN_KEYWORD_COVERAGE = 0.5
 
+MIN_KEYWORD_BACKUP_SEMANTIC = 0.66
+
 # 최고 의미 점수가 이 값보다 낮으면 관련 공지 없음 (임시 추가)
-MIN_SEARCH_TOP_SEMANTIC_SCORE = 0.86
+MIN_SEARCH_TOP_SEMANTIC_SCORE = 0.7
 
 RECENT_SORT_PATTERNS = (
     "최신순",
@@ -276,9 +277,11 @@ def search_notices(
 
 def get_relevant_notices(
     results: list[dict],
-    min_top_score: float = MIN_TOP_SCORE,
     min_keyword_score: float = MIN_KEYWORD_SCORE,
     min_semantic_score: float = MIN_SEMANTIC_SCORE,
+    min_search_top_semantic_score: float = MIN_SEARCH_TOP_SEMANTIC_SCORE,
+    max_semantic_score_gap: float = MAX_SEMANTIC_SCORE_GAP,
+    min_keyword_backup_semantic: float = MIN_KEYWORD_BACKUP_SEMANTIC,
     required_keywords: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict]:
     """
@@ -289,8 +292,6 @@ def get_relevant_notices(
     """
     if not results:
         return []
-
-    top_score = results[0]["hybrid_score"]
 
     top_keyword_score = max(
         result["keyword_score"] for result in results
@@ -303,7 +304,7 @@ def get_relevant_notices(
     # 키워드 점수가 충분히 높거나 의미 점수가 충분히 높으면 관련 공지로 판단
     has_reliable_search_signal = (
         top_keyword_score >= min_keyword_score
-        or top_semantic_score >= MIN_SEARCH_TOP_SEMANTIC_SCORE
+        or top_semantic_score >= min_search_top_semantic_score
     )
     
     # 하이브리드 점수와 키워드 점수가 모두 낮으면 관련 공지 없음
@@ -320,16 +321,18 @@ def get_relevant_notices(
     for result in results:
         semantic_score_gap = top_semantic_score - result["semantic_score"]
         
-        has_strong_keyword_match = (
-            result["keyword_score"] >= min_keyword_score
-        )
         has_strong_semantic_match = (
             result["semantic_score"] >= min_semantic_score
-            and semantic_score_gap <= MAX_SEMANTIC_SCORE_GAP
+            and semantic_score_gap <= max_semantic_score_gap
         )
 
+        has_supported_keyword_match = (
+            result["keyword_score"] >= min_keyword_score
+            and result["semantic_score"] >= min_keyword_backup_semantic
+        )
+        
         if (
-            has_strong_keyword_match
+            has_supported_keyword_match
             or has_strong_semantic_match
         ):
             if len(unique_required_keywords) >= MIN_SPECIFIC_QUERY_KEYWORDS:
@@ -366,6 +369,103 @@ def is_recent_sort_request(question: str) -> bool:
     normalized = " ".join(question.lower().split())
     return any(pattern in normalized for pattern in RECENT_SORT_PATTERNS)
 
+def resolve_relative_time_expression(
+    question: str,
+    now=None,
+) -> str:
+    """상대 시간 표현을 검색 가능한 절대 표현으로 변환합니다."""
+    current = get_current_datetime(now)
+    year = current.year
+    month = current.month
+
+    resolved = question
+
+    # 연도 표현
+    resolved = resolved.replace("올해", f"{year}년")
+    resolved = resolved.replace("작년", f"{year - 1}년")
+    resolved = resolved.replace("내년", f"{year + 1}년")
+
+    # 현재 학기 계산
+    if 3 <= month <= 8:
+        current_semester_year = year
+        current_semester = 1
+    elif 9 <= month <= 12:
+        current_semester_year = year
+        current_semester = 2
+    else:
+        current_semester_year = year - 1
+        current_semester = 2
+
+    # 이번 학기
+    if(
+        "이번학기" in resolved
+        or "이번 학기" in resolved
+        or "지금학기" in resolved
+        or "지금 학기" in resolved
+        or "현재학기" in resolved
+        or "현재 학기" in resolved
+    ):
+
+        # 졸업 질문은 실제 졸업 월로 변환
+        if "졸업" in resolved:
+            if 3 <= month <= 8:
+                replacement = f"{year}년 8월"
+            elif 9 <= month <= 12:
+                replacement = f"{year + 1}년 2월"
+            else:
+                replacement = f"{year}년 2월"
+        else:
+            replacement = (
+                f"{current_semester_year}-{current_semester}학기"
+            )
+
+        resolved = resolved.replace("이번학기", replacement)
+        resolved = resolved.replace("이번 학기", replacement)
+        resolved = resolved.replace("지금학기", replacement)
+        resolved = resolved.replace("지금 학기", replacement)
+        resolved = resolved.replace("현재학기", replacement)
+        resolved = resolved.replace("현재 학기", replacement)
+
+    # 지난 학기
+    if (
+        "지난학기" in resolved 
+        or "지난 학기" in resolved
+        or "저번학기" in resolved
+        or "저번 학기" in resolved
+        or "이전학기" in resolved
+        or "이전 학기" in resolved
+    ):
+        if current_semester == 1:
+            previous_year = current_semester_year - 1
+            previous_semester = 2
+        else:
+            previous_year = current_semester_year
+            previous_semester = 1
+
+        replacement = f"{previous_year}-{previous_semester}학기"
+
+        resolved = resolved.replace("지난학기", replacement)
+        resolved = resolved.replace("지난 학기", replacement)
+        resolved = resolved.replace("저번학기", replacement)
+        resolved = resolved.replace("저번 학기", replacement)
+        resolved = resolved.replace("이전학기", replacement)
+        resolved = resolved.replace("이전 학기", replacement)
+
+    # 다음 학기
+    if "다음학기" in resolved or "다음 학기" in resolved:
+        if current_semester == 1:
+            next_year = current_semester_year
+            next_semester = 2
+        else:
+            next_year = current_semester_year + 1
+            next_semester = 1
+
+        replacement = f"{next_year}-{next_semester}학기"
+
+        resolved = resolved.replace("다음학기", replacement)
+        resolved = resolved.replace("다음 학기", replacement)
+
+    return resolved
 
 def create_result_selection_answer(results: list[dict]) -> str:
     """본문을 노출하지 않고 선택 가능한 공지 제목 목록을 만듭니다."""
@@ -451,6 +551,38 @@ def print_search_failure(results: list[dict]) -> None:
 
         print(f"2위 하이브리드 점수: {second_score:.4f}")
         print(f"1위와 2위 점수 차이: {score_gap:.4f}")
+        
+def print_search_results(
+    title: str,
+    results: list[dict],
+    passed_notice_ids: set | None = None,
+) -> None:
+    """임계값 실험을 위해 검색 결과와 점수를 출력합니다."""
+    print(f"\n===== {title} =====")
+
+    if not results:
+        print("결과 없음")
+        return
+
+    for rank, result in enumerate(results, start=1):
+        notice = result.get("notice", {})
+        notice_id = notice.get("id")
+        
+        status = ""
+        if passed_notice_ids is not None:
+            status = (
+                " [✅ 통과]"
+                if notice_id in passed_notice_ids
+                else " [❌ 탈락]"
+            )
+
+        print(
+            f"{rank}.{status} {notice.get('title', '제목 없음')}\n"
+            f"   hybrid={result.get('hybrid_score', 0.0):.4f} "
+            f"semantic={result.get('semantic_score', 0.0):.4f} "
+            f"keyword={result.get('keyword_score', 0.0):.4f}\n"
+            f"   matched_keywords={result.get('matched_keywords', [])}"
+        )        
 
 
 # =========================================================
@@ -458,7 +590,6 @@ def print_search_failure(results: list[dict]) -> None:
 # =========================================================
 
 def main() -> None:
-    from sentence_transformers import SentenceTransformer
 
     notices = []
     notice_embeddings = None
@@ -474,12 +605,12 @@ def main() -> None:
         print(f"챗봇 실행 설정을 확인해주세요: {error}")
         return
 
-    print("임베딩 모델을 불러오는 중입니다.")
+    print("Gemini 임베딩 모델을 불러오는 중입니다.")
 
     try:
-        model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        model = GeminiEmbeddingModel()
     except Exception as error:
-        print(f"임베딩 모델을 불러오지 못했습니다: {error}")
+        print(f"Gemini 임베딩 모델을 불러오지 못했습니다: {error}")
         return
 
     try:
@@ -503,7 +634,7 @@ def main() -> None:
             f"{notice_repository.source_name}에서 "
             f"공지 {len(notices)}개를 불러왔습니다."
         )
-        print("공지 임베딩을 생성합니다.")
+        print("Gemini 공지 임베딩을 생성합니다.")
 
         notice_embeddings = embed_notices(
             model=model,
@@ -717,13 +848,28 @@ def main() -> None:
                 "DB 준비 전에는 RAG_SEARCH_SOURCE=notices로 실행해주세요."
             )
             continue
-        
 
         relevant_results = get_relevant_notices(
             results=search_results,
             required_keywords=preprocessor.extract_keywords(
                 resolution.search_question
             ),
+        )
+        
+        passed_notice_ids = {
+            result.get("notice", {}).get("id")
+            for result in relevant_results
+        }
+        
+        print_search_results(
+            "필터링 전 검색 결과",
+            search_results,
+            passed_notice_ids=passed_notice_ids,
+        )
+        
+        print_search_results(
+            "필터링 후 관련 공지",
+            relevant_results,
         )
         
         if not relevant_results:
