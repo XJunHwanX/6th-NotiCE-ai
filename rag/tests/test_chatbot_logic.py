@@ -259,6 +259,7 @@ class SearchTests(unittest.TestCase):
     def test_rejects_specific_query_with_low_keyword_coverage(self):
         results = [{
             "hybrid_score": 0.77,
+            "semantic_score": 0.72,
             "keyword_score": 0.4,
             "matched_keywords": ["컴퓨터", "공학"],
             "notice": {"id": 1, "published_at": "2026-03-02"},
@@ -280,6 +281,7 @@ class SearchTests(unittest.TestCase):
     def test_accepts_specific_query_with_enough_keyword_coverage(self):
         results = [{
             "hybrid_score": 0.85,
+            "semantic_score": 0.82,
             "keyword_score": 0.8,
             "matched_keywords": ["신청", "장학금"],
             "notice": {"id": 1, "published_at": "2026-05-22"},
@@ -296,16 +298,19 @@ class SearchTests(unittest.TestCase):
         results = [
             {
                 "hybrid_score": 0.91,
+                "semantic_score": 0.90,
                 "keyword_score": 1.0,
                 "notice": {"id": 1, "published_at": "2024-03-01"},
             },
             {
                 "hybrid_score": 0.89,
+                "semantic_score": 0.89,
                 "keyword_score": 1.0,
                 "notice": {"id": 2, "published_at": "2026-07-01"},
             },
             {
                 "hybrid_score": 0.88,
+                "semantic_score": 0.88,
                 "keyword_score": 1.0,
                 "notice": {"id": 3, "published_at": None},
             },

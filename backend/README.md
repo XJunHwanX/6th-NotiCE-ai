@@ -160,9 +160,9 @@ GET /api/push/vapid-public-key
 레포 최상위의 `render.yaml`을 Blueprint로 연결하면 무료 Web Service가
 생성됩니다. `RAG_RETRIEVAL_MODE=hybrid`는 로컬 모델을 적재하지 않고
 Gemini Embedding API의 의미 임베딩과 키워드 검색을 함께 사용합니다.
-검색 점수는 상위 후보의 순서를 정하는 데만 사용합니다. 고정 임계값으로 공지를
-제외하지 않고, 상위 후보의 제목과 본문을 Gemini가 다시 읽어 구체 질문은 바로
-답변하고 목록 질문은 관련 공지 카드만 표시합니다.
+검색 결과는 `rag/src/search.py`의 의미·키워드 임계값으로 관련성을 판정합니다.
+임계값을 통과한 공지가 하나이거나 시험 관련 질문이면 바로 답변하고, 여러 공지가
+통과하면 관련 공지 카드를 표시합니다.
 
 기존 `notice_chunks`가 E5 벡터라면 배포 전에 Gemini 벡터로 한 번 갱신합니다.
 

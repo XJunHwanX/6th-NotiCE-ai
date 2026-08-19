@@ -39,6 +39,7 @@ class AnswerPromptTests(unittest.TestCase):
 
         generate_answer(
             question="알고리즘 시험 언제야?",
+            resolved_question="알고리즘 시험 언제야?",
             relevant_results=results,
             now=datetime(2026, 6, 10, 12, 0, tzinfo=ZoneInfo("Asia/Seoul")),
             client=client,
