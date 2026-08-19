@@ -311,6 +311,58 @@ class ChatbotServiceTests(unittest.TestCase):
         self.assertEqual(result.sources, [])
         self.assertFalse(result.selection_required)
 
+    def test_time_only_open_search_skips_threshold_and_shows_cards(self):
+        search_results = [
+            self._search_result(
+                10,
+                semantic_score=0.4,
+                keyword_score=0.2,
+                matched_keywords=[],
+            )
+        ]
+        plan = QueryPlan(
+            route=QueryRoute.OPEN_NOTICE_SEARCH,
+            search_query="이번 주 마감",
+            confidence=0.95,
+        )
+
+        with (
+            patch("rag.src.chatbot.plan_question", return_value=plan),
+            patch.object(self.service, "_search", return_value=search_results),
+        ):
+            result = self.service.handle_message("이번 주 마감인 공지 있어?")
+
+        self.assertEqual(result.state["candidate_notice_ids"], [10])
+        self.assertEqual(result.state["shown_notice_ids"], [10])
+        self.assertEqual([source["id"] for source in result.sources], [10])
+        self.assertTrue(result.selection_required)
+        self.assertIn("공지 카드를 선택", result.answer)
+
+    def test_topical_open_search_keeps_threshold(self):
+        search_results = [
+            self._search_result(
+                10,
+                semantic_score=0.4,
+                keyword_score=0.2,
+                matched_keywords=[],
+            )
+        ]
+        plan = QueryPlan(
+            route=QueryRoute.OPEN_NOTICE_SEARCH,
+            search_query="신청 가능한 장학금",
+            confidence=0.95,
+        )
+
+        with (
+            patch("rag.src.chatbot.plan_question", return_value=plan),
+            patch.object(self.service, "_search", return_value=search_results),
+        ):
+            result = self.service.handle_message("신청 가능한 장학금 있어?")
+
+        self.assertEqual(result.sources, [])
+        self.assertFalse(result.selection_required)
+        self.assertIn("현재 신청 가능한 공지를 확인하지 못했습니다", result.answer)
+
     def test_reset_discards_client_state(self):
         result = self.service.handle_message(
             "초기화",
