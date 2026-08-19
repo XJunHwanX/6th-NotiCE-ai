@@ -101,7 +101,7 @@ function stripInlineSources(answer: string): string {
 
 /** 빈 화면과 입력창 위 퀵칩에 공통으로 쓰는 자주 묻는 질문. */
 export const SUGGESTED_QUESTIONS = [
-  "이번 주 마감인 공지 있어?",
+  "신청 가능한 공지 있어?",
   "장학금 관련 공지 있어?",
   "시험 일정 및 공지",
   "요즘 올라온 채용·인턴 공지 있어?",
