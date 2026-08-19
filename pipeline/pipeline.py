@@ -401,7 +401,10 @@ def send_push_notification(subscription, title, url):
                 ensure_ascii=False,
             ),
             vapid_private_key=VAPID_PRIVATE_KEY,
-            vapid_claims=VAPID_CLAIMS,
+            # pywebpush가 claims dict에 aud/exp를 in-place로 채워 넣으므로,
+            # 공유 dict를 그대로 넘기면 첫 발송(FCM)의 aud가 이후 Apple 발송에도
+            # 재사용돼 403 BadJwtToken이 난다. 발송마다 복사본을 넘겨 방지한다.
+            vapid_claims=dict(VAPID_CLAIMS),
         )
         return True, None
     except WebPushException as e:
