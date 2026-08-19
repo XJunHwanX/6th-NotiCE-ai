@@ -40,6 +40,27 @@ from .search import (
 
 
 RESET_PATTERNS = {"초기화", "처음부터", "대화 리셋", "검색 리셋"}
+OPEN_NOTICE_TIME_KEYWORDS = {
+    "가능",
+    "금주",
+    "기간",
+    "다음",
+    "다음달",
+    "다음주",
+    "당일",
+    "마감",
+    "모레",
+    "모집",
+    "신청",
+    "오늘",
+    "이번",
+    "이번달",
+    "이번주",
+    "접수",
+    "주간",
+    "지금",
+    "현재",
+}
 logger = logging.getLogger("uvicorn.error")
 
 
@@ -364,12 +385,22 @@ class ChatbotService:
             exclude_notice_ids=resolution.exclude_notice_ids,
         )
         self._log_search_results("search", search_results)
-        relevant_results = get_relevant_notices(
-            results=search_results,
-            required_keywords=self.preprocessor.extract_keywords(
-                resolution.search_question
-            ),
+        is_time_only_open_search = self._is_time_only_open_search(
+            resolution.search_question,
+            query_route,
         )
+        if is_time_only_open_search:
+            # 미래 마감일 조건을 이미 통과한 결과다. "이번 주", "신청 가능"
+            # 같은 시간 표현은 공지 본문에 없을 수 있으므로 의미/키워드
+            # 임계값으로 다시 제거하지 않는다.
+            relevant_results = sort_notices_by_published_at(search_results)
+        else:
+            relevant_results = get_relevant_notices(
+                results=search_results,
+                required_keywords=self.preprocessor.extract_keywords(
+                    resolution.search_question
+                ),
+            )
         relevant_ids = set(self._notice_ids(relevant_results))
         logger.info(
             "[chat.threshold] searched=%d selected=%d selected_ids=%s",
@@ -407,7 +438,10 @@ class ChatbotService:
 
         if (
             should_answer_without_selection(query_route)
-            or len(displayed_results) == 1
+            or (
+                len(displayed_results) == 1
+                and not is_time_only_open_search
+            )
         ):
             direct_results = [self._hydrate(result) for result in displayed_results]
             conversation.candidate_results = direct_results
@@ -478,6 +512,20 @@ class ChatbotService:
         return (
             len(conversation.shown_notice_ids)
             < len(conversation.candidate_results)
+        )
+
+    def _is_time_only_open_search(
+        self,
+        question: str,
+        query_route: QueryRoute | None,
+    ) -> bool:
+        if query_route != QueryRoute.OPEN_NOTICE_SEARCH:
+            return False
+
+        keywords = self.preprocessor.extract_keywords(question)
+        return bool(keywords) and all(
+            keyword in OPEN_NOTICE_TIME_KEYWORDS
+            for keyword in keywords
         )
 
     @staticmethod

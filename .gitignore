@@ -224,3 +224,6 @@ public_key.pem
 pipeline/model_final_v5/
 
 .DS_Store
+
+# Locally generated artifacts
+/output/
