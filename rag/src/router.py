@@ -203,6 +203,17 @@ def plan_question(
             question=question,
         )
 
+    if (
+        classify_intent(question) == QueryIntent.EXAM_LOCATION
+        and parsed.route != QueryRoute.EXAM_NOTICE_SEARCH
+    ):
+        return QueryPlan(
+            route=QueryRoute.EXAM_NOTICE_SEARCH,
+            search_query=question,
+            confidence=1.0,
+            source="rule",
+        )
+
     clarification = parsed.clarification
     if parsed.route == QueryRoute.CLARIFICATION and not clarification:
         clarification = "어떤 종류의 공지를 찾는지 조금 더 알려주세요."

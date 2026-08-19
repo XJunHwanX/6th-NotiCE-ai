@@ -1,8 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from rag.src.chatbot import ChatbotService
-from rag.src.llm import NoticeCandidateDecision
+from rag.src.chatbot import ChatbotConfigurationError, ChatbotService
 from rag.src.preprocess import QueryPreprocessor
 from rag.src.router import QueryPlan, QueryRoute
 
@@ -52,6 +51,38 @@ class ChatbotServiceTests(unittest.TestCase):
             notices=[],
             notice_embeddings=None,
         )
+
+    def _search_result(
+        self,
+        notice_id,
+        *,
+        semantic_score=0.9,
+        keyword_score=0.8,
+        matched_keywords=None,
+    ):
+        return {
+            "hybrid_score": (
+                semantic_score * 0.85
+                + keyword_score * 0.15
+            ),
+            "semantic_score": semantic_score,
+            "keyword_score": keyword_score,
+            "matched_keywords": matched_keywords or ["장학금", "공지"],
+            "notice": self.service.notice_repository.fetch_notice(notice_id),
+        }
+
+    def test_rejects_keyword_only_retrieval_mode(self):
+        with self.assertRaisesRegex(
+            ChatbotConfigurationError,
+            "RAG_RETRIEVAL_MODE=hybrid",
+        ):
+            ChatbotService(
+                model=None,
+                preprocessor=QueryPreprocessor(),
+                search_source="chunks",
+                notice_repository=FakeNoticeRepository(),
+                retrieval_mode="keyword",
+            )
 
     def test_restores_candidate_ids_and_answers_number_selection(self):
         state = {
@@ -190,10 +221,18 @@ class ChatbotServiceTests(unittest.TestCase):
         self.assertEqual(result.state["router_context"][-2]["content"], "안녕")
         self.assertEqual(result.state["router_context"][-1]["content"], "안녕하세요!")
 
-    def test_list_decision_caches_selected_candidates_newest_first(self):
+    def test_threshold_filter_caches_candidates_newest_first(self):
         search_results = [
-            {"notice": self.service.notice_repository.fetch_notice(notice_id)}
-            for notice_id in [5, 4, 3, 2]
+            self._search_result(
+                notice_id,
+                semantic_score=semantic_score,
+            )
+            for notice_id, semantic_score in [
+                (5, 0.90),
+                (4, 0.89),
+                (3, 0.88),
+                (2, 0.87),
+            ]
         ]
         plan = QueryPlan(
             route=QueryRoute.NOTICE_SEARCH,
@@ -204,13 +243,6 @@ class ChatbotServiceTests(unittest.TestCase):
         with (
             patch("rag.src.chatbot.plan_question", return_value=plan),
             patch.object(self.service, "_search", return_value=search_results),
-            patch(
-                "rag.src.chatbot.judge_notice_candidates",
-                return_value=NoticeCandidateDecision(
-                    mode="list",
-                    notice_ids=[5, 4, 3, 2],
-                ),
-            ),
         ):
             result = self.service.handle_message("장학금 알려줘")
 
@@ -239,14 +271,6 @@ class ChatbotServiceTests(unittest.TestCase):
             patch("rag.src.chatbot.plan_question", return_value=plan),
             patch.object(self.service, "_search", return_value=search_results),
             patch(
-                "rag.src.chatbot.judge_notice_candidates",
-                return_value=NoticeCandidateDecision(
-                    mode="answer",
-                    notice_ids=[10],
-                    reason="장학금 신청 기한을 답할 수 있음",
-                ),
-            ),
-            patch(
                 "rag.src.chatbot.generate_answer",
                 return_value="장학금 안내입니다.",
             ),
@@ -261,11 +285,16 @@ class ChatbotServiceTests(unittest.TestCase):
         self.assertIn("장학금 신청 안내", output)
         self.assertIn("hybrid=0.9100", output)
         self.assertIn("filter_status=pending", output)
-        self.assertIn("[chat.judge] mode=answer searched=1 selected=1", output)
+        self.assertIn("[chat.threshold] searched=1 selected=1", output)
 
-    def test_not_found_decision_does_not_expose_search_candidates(self):
+    def test_threshold_rejection_does_not_expose_search_candidates(self):
         search_results = [
-            {"notice": self.service.notice_repository.fetch_notice(10)}
+            self._search_result(
+                10,
+                semantic_score=0.4,
+                keyword_score=0.2,
+                matched_keywords=[],
+            )
         ]
         plan = QueryPlan(
             route=QueryRoute.NOTICE_SEARCH,
@@ -275,14 +304,10 @@ class ChatbotServiceTests(unittest.TestCase):
         with (
             patch("rag.src.chatbot.plan_question", return_value=plan),
             patch.object(self.service, "_search", return_value=search_results),
-            patch(
-                "rag.src.chatbot.judge_notice_candidates",
-                return_value=NoticeCandidateDecision(mode="not_found"),
-            ),
         ):
             result = self.service.handle_message("없는 공지 알려줘")
 
-        self.assertIn("관련 내용을 찾지 못했습니다", result.answer)
+        self.assertIn("관련 공지를 찾지 못했습니다", result.answer)
         self.assertEqual(result.sources, [])
         self.assertFalse(result.selection_required)
 

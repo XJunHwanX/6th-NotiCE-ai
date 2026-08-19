@@ -64,14 +64,16 @@ class QueryRouterTests(unittest.TestCase):
     def test_router_prompt_includes_time_and_conversation_state(self):
         prompt = create_router_prompt(
             question="내일 마감하는 공지 있어?",
-            has_context=True,
-            has_active_notice=False,
+            router_context=(
+                "[이전 검색 질문]\n장학금 공지\n\n"
+                "[선택된 공지]\n- ID: 없음"
+            ),
             now=datetime(2026, 7, 19, 6, 30, tzinfo=timezone.utc),
         )
 
         self.assertIn("2026-07-19T15:30:00+09:00", prompt)
-        self.assertIn("이전 검색 맥락 존재: True", prompt)
-        self.assertIn("선택된 공지 존재: False", prompt)
+        self.assertIn("[이전 검색 질문]\n장학금 공지", prompt)
+        self.assertIn("[선택된 공지]\n- ID: 없음", prompt)
 
     def test_falls_back_to_rules_when_llm_call_fails(self):
         client = FakeClient(error=RuntimeError("temporary failure"))

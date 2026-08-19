@@ -5,8 +5,6 @@ import logging
 from dataclasses import dataclass, replace
 from typing import Any
 
-import numpy as np
-
 from .config import GEMINI_EMBEDDING_MODEL_NAME
 from .conversation import ConversationState
 from .db import (
@@ -20,105 +18,29 @@ from .db import (
     get_notice_repository,
     get_rag_search_source,
 )
-from .llm import generate_answer, generate_general_answer, judge_notice_candidates
+from .intent import QueryIntent
+from .llm import generate_answer, generate_general_answer
 from .preprocess import DEFAULT_PREPROCESSOR, QueryPreprocessor
-from .retriever import (
-    search_notice_chunks,
-    search_notice_chunks_keyword_only,
-)
+from .retriever import search_notice_chunks
 from .router import QueryRoute, get_current_datetime, plan_question, route_to_intent
 from .search import (
-    calculate_keyword_score,
+    KEYWORD_WEIGHT,
+    MAX_RESULT_CHOICES,
+    SEMANTIC_WEIGHT,
+    TOP_K,
     create_query_preprocessor,
     embed_notices,
+    get_relevant_notices,
     hydrate_result_notice,
+    is_recent_sort_request,
+    search_notices,
+    should_answer_without_selection,
+    sort_notices_by_published_at,
 )
 
 
 RESET_PATTERNS = {"초기화", "처음부터", "대화 리셋", "검색 리셋"}
-RETRIEVAL_MODES = {"hybrid", "keyword"}
 logger = logging.getLogger("uvicorn.error")
-
-# 검색 점수는 후보 순위에만 사용하고 관련성 통과 여부는 Gemini가 판정합니다.
-TOP_K = 15
-MAX_RESULT_CHOICES = 3
-JUDGE_FULL_NOTICE_LIMIT = 5
-SEMANTIC_WEIGHT = 0.85
-KEYWORD_WEIGHT = 0.15
-
-RECENT_SORT_PATTERNS = (
-    "최신순",
-    "최신 순",
-    "최근순",
-    "최근 순",
-    "날짜순",
-    "날짜 순",
-    "작성일순",
-    "작성일 순",
-)
-
-
-def search_notices(
-    model: Any,
-    question: str,
-    notices: list[dict],
-    notice_embeddings: Any,
-    top_k: int = TOP_K,
-    exclude_notice_ids: tuple | list | set | None = None,
-    preprocessor: QueryPreprocessor = DEFAULT_PREPROCESSOR,
-) -> list[dict]:
-    """search.py와 같은 의미·키워드 하이브리드 점수로 공지를 검색합니다."""
-    question_embedding = model.encode(
-        f"query: {question}",
-        normalize_embeddings=True,
-    )
-    question_embedding = np.asarray(question_embedding, dtype=np.float32)
-    semantic_scores = notice_embeddings @ question_embedding
-    excluded_ids = set(exclude_notice_ids or ())
-    keywords = preprocessor.extract_keywords(question)
-    results = []
-
-    for index, notice in enumerate(notices):
-        if notice.get("id") in excluded_ids:
-            continue
-
-        semantic_score = float(semantic_scores[index])
-        keyword_score, matched_keywords = calculate_keyword_score(
-            question=question,
-            notice=notice,
-            keywords=keywords,
-            preprocessor=preprocessor,
-        )
-        hybrid_score = (
-            semantic_score * SEMANTIC_WEIGHT
-            + keyword_score * KEYWORD_WEIGHT
-        )
-        results.append({
-            "score": hybrid_score,
-            "hybrid_score": hybrid_score,
-            "semantic_score": semantic_score,
-            "keyword_score": keyword_score,
-            "matched_keywords": matched_keywords,
-            "notice": notice,
-        })
-
-    results.sort(key=lambda result: result["hybrid_score"], reverse=True)
-    return results[: min(top_k, len(results))]
-
-
-def sort_notices_by_published_at(results: list[dict]) -> list[dict]:
-    return sorted(
-        results,
-        key=lambda result: str(
-            result.get("notice", {}).get("published_at") or ""
-        ),
-        reverse=True,
-    )
-
-
-def is_recent_sort_request(question: str) -> bool:
-    normalized = " ".join(question.lower().split())
-    return any(pattern in normalized for pattern in RECENT_SORT_PATTERNS)
 
 
 class ChatbotConfigurationError(RuntimeError):
@@ -151,6 +73,11 @@ class ChatbotService:
         notice_embeddings: Any = None,
         retrieval_mode: str = "hybrid",
     ) -> None:
+        if retrieval_mode != "hybrid":
+            raise ChatbotConfigurationError(
+                "임계값 기반 공지 판정은 "
+                "RAG_RETRIEVAL_MODE=hybrid만 지원합니다."
+            )
         self.model = model
         self.preprocessor = preprocessor
         self.search_source = search_source
@@ -168,24 +95,19 @@ class ChatbotService:
                 "RAG_RETRIEVAL_MODE",
                 "hybrid",
             ).lower()
-            if retrieval_mode not in RETRIEVAL_MODES:
+            if retrieval_mode != "hybrid":
                 raise ValueError(
-                    "RAG_RETRIEVAL_MODE는 hybrid 또는 keyword여야 합니다."
-                )
-            if retrieval_mode == "keyword" and search_source != "chunks":
-                raise ValueError(
-                    "keyword 검색은 RAG_SEARCH_SOURCE=chunks에서만 사용할 수 있습니다."
+                    "임계값 기반 공지 판정은 "
+                    "RAG_RETRIEVAL_MODE=hybrid만 지원합니다."
                 )
 
             notice_repository = get_notice_repository()
             chunk_repository = (
                 get_chunk_repository() if search_source == "chunks" else None
             )
-            model = None
-            if retrieval_mode == "hybrid":
-                from .embedding import GeminiEmbeddingModel
+            from .embedding import GeminiEmbeddingModel
 
-                model = GeminiEmbeddingModel()
+            model = GeminiEmbeddingModel()
         except Exception as error:
             raise ChatbotConfigurationError(
                 f"챗봇 초기화에 실패했습니다: {error}"
@@ -290,6 +212,7 @@ class ChatbotService:
             )
             answer = generate_answer(
                 question=answer_question,
+                resolved_question=answer_question,
                 relevant_results=[selected_result],
                 answer_mode="summary",
             )
@@ -308,7 +231,8 @@ class ChatbotService:
                 or question
             )
             answer = generate_answer(
-                question=answer_question,
+                question=question,
+                resolved_question=answer_question,
                 relevant_results=[selected_result],
                 answer_mode="summary",
             )
@@ -386,8 +310,16 @@ class ChatbotService:
                     selection_required=conversation.has_candidates,
                     has_more=self._has_hidden_candidates(conversation),
                 )
+            previous_search_query = conversation.last_search_query
+            resolved_follow_up = (
+                f"이전 검색 대상: {previous_search_query}\n"
+                f"현재 후속 질문: {processed_query.normalized}"
+                if previous_search_query
+                else processed_query.normalized
+            )
             answer = generate_answer(
-                question=answer_question,
+                question=question,
+                resolved_question=resolved_follow_up,
                 relevant_results=[conversation.active_result],
                 answer_mode="focused",
             )
@@ -432,31 +364,18 @@ class ChatbotService:
             exclude_notice_ids=resolution.exclude_notice_ids,
         )
         self._log_search_results("search", search_results)
-        judge_candidates = [
-            self._hydrate(result) if index < JUDGE_FULL_NOTICE_LIMIT else result
-            for index, result in enumerate(search_results)
-        ]
-        decision = judge_notice_candidates(
-            question=answer_question,
-            search_query=resolution.search_question,
-            candidates=judge_candidates,
-            router_context=conversation.build_router_context(),
+        relevant_results = get_relevant_notices(
+            results=search_results,
+            required_keywords=self.preprocessor.extract_keywords(
+                resolution.search_question
+            ),
         )
-        relevant_results = self._select_results_by_id(
-            search_results,
-            decision.notice_ids,
-        )
-        if decision.mode == "list":
-            relevant_results = sort_notices_by_published_at(relevant_results)
         relevant_ids = set(self._notice_ids(relevant_results))
         logger.info(
-            "[chat.judge] mode=%s searched=%d selected=%d selected_ids=%s "
-            "reason=%r",
-            decision.mode,
+            "[chat.threshold] searched=%d selected=%d selected_ids=%s",
             len(search_results),
             len(relevant_results),
             list(relevant_ids),
-            self._log_text(decision.reason),
         )
         self._log_search_results(
             "candidate",
@@ -464,14 +383,16 @@ class ChatbotService:
             passed_ids=relevant_ids,
         )
 
-        if decision.mode == "not_found" or not relevant_results:
+        if not relevant_results:
             if query_route == QueryRoute.OPEN_NOTICE_SEARCH:
                 answer = (
                     "현재 신청 가능한 공지를 확인하지 못했습니다. "
                     "공지의 마감일 정보가 아직 등록되지 않았을 수도 있습니다."
                 )
+            elif resolution.intent == QueryIntent.MORE_RESULTS:
+                answer = "현재 저장된 공지 중 추가 결과가 없습니다."
             else:
-                answer = "현재 저장된 공지에서는 관련 내용을 찾지 못했습니다."
+                answer = "관련 공지를 찾지 못했습니다."
             return self._result(answer, conversation)
 
         displayed_results = relevant_results[:MAX_RESULT_CHOICES]
@@ -484,12 +405,16 @@ class ChatbotService:
         conversation.shown_notice_ids = self._notice_ids(displayed_results)
         conversation.referenced_notice_ids = self._notice_ids(displayed_results)
 
-        if decision.mode == "answer":
-            direct_results = [self._hydrate(result) for result in relevant_results]
+        if (
+            should_answer_without_selection(query_route)
+            or len(displayed_results) == 1
+        ):
+            direct_results = [self._hydrate(result) for result in displayed_results]
             conversation.candidate_results = direct_results
             conversation.active_result = direct_results[0]
             answer = generate_answer(
-                question=answer_question,
+                question=question,
+                resolved_question=resolution.search_question,
                 relevant_results=direct_results,
                 answer_mode="focused",
             )
@@ -584,18 +509,6 @@ class ChatbotService:
         ]
 
     @staticmethod
-    def _select_results_by_id(
-        results: list[dict],
-        selected_ids: list[Any],
-    ) -> list[dict]:
-        selected = {str(notice_id) for notice_id in selected_ids}
-        return [
-            result
-            for result in results
-            if str(result.get("notice", {}).get("id")) in selected
-        ]
-
-    @staticmethod
     def _active_notice_id(conversation: ConversationState) -> Any | None:
         if conversation.active_result is None:
             return None
@@ -653,19 +566,6 @@ class ChatbotService:
             if self.chunk_repository is None:
                 raise ChatbotConfigurationError(
                     "공지 청크 검색 저장소가 준비되지 않았습니다."
-                )
-            if self.retrieval_mode == "keyword":
-                return search_notice_chunks_keyword_only(
-                    question=question,
-                    repository=self.chunk_repository,
-                    top_k=TOP_K,
-                    deadline_from=(
-                        get_current_datetime().isoformat()
-                        if query_route == QueryRoute.OPEN_NOTICE_SEARCH
-                        else None
-                    ),
-                    exclude_notice_ids=exclude_notice_ids,
-                    preprocessor=self.preprocessor,
                 )
             return search_notice_chunks(
                 model=self.model,
