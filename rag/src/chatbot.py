@@ -420,10 +420,7 @@ class ChatbotService:
 
         if not relevant_results:
             if query_route == QueryRoute.OPEN_NOTICE_SEARCH:
-                answer = (
-                    "현재 신청 가능한 공지를 확인하지 못했습니다. "
-                    "공지의 마감일 정보가 아직 등록되지 않았을 수도 있습니다."
-                )
+                answer = "지금은 신청 가능한 공지를 찾을 수 없습니다."
             elif resolution.intent == QueryIntent.MORE_RESULTS:
                 answer = "현재 저장된 공지 중 추가 결과가 없습니다."
             else:

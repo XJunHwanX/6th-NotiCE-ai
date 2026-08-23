@@ -888,11 +888,7 @@ def main() -> None:
                 continue
 
             if query_route == QueryRoute.OPEN_NOTICE_SEARCH:
-                answer = (
-                    "현재 신청 가능한 공지를 확인하지 못했습니다. "
-                    "크롤링 파이프라인의 notices.deadline 적재 상태를  "
-                    "확인해주세요."
-                )
+                answer = "지금은 신청 가능한 공지를 찾을 수 없습니다."
                 print_and_record_answer(
                     conversation,
                     answer,
